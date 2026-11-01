@@ -1,6 +1,9 @@
+import './config.js'; // .env 를 먼저 로드
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { addressKey, distanceM } from './model.js';
-import { getSources } from './sources/index.js';
+import { dataMode, getSources } from './sources/index.js';
+import { createStore } from './store.js';
 
 /**
  * 같은 실물 매물인지 판단하는 기준.
@@ -8,6 +11,7 @@ import { getSources } from './sources/index.js';
  */
 export const MATCH_RULES = {
   maxDistanceM: 40, // 주소가 없거나 다를 때 좌표 거리 허용치
+  blurredDistanceM: 300, // 좌표를 흐려서 주는 플랫폼끼리 비교할 때 허용치 (같은 동 + 층·가격 일치 조건과 함께)
   areaTolerancePct: 0.04, // 전용면적 오차 (평↔㎡ 변환 반올림 등)
   areaToleranceM2: 1.0,
 };
@@ -31,8 +35,22 @@ export function isSameProperty(a, b) {
 
   const ka = addressKey(a.addr);
   const kb = addressKey(b.addr);
-  if (ka && kb) return ka === kb && distanceM(a, b) < 300; // 주소가 같으면 동일 (좌표는 터무니없지 않은지만 확인)
-  return distanceM(a, b) <= MATCH_RULES.maxDistanceM;
+  const d = distanceM(a, b);
+  if (ka && kb) return ka === kb && d < 300; // 주소가 같으면 동일 (좌표는 터무니없지 않은지만 확인)
+  if (d <= MATCH_RULES.maxDistanceM) return true;
+
+  // 실제 플랫폼들은 지번을 숨기고 좌표도 일부러 흐린다.
+  // → 같은 동 + 층이 둘 다 명시되어 같음 + 가격이 거의 같음 + 가까움 이면 같은 매물로 본다
+  const sameDong = a.addr.dong && a.addr.dong === b.addr.dong;
+  return Boolean(
+    sameDong && a.floor != null && b.floor != null && d <= MATCH_RULES.blurredDistanceM && priceClose(a, b),
+  );
+}
+
+function priceClose(a, b) {
+  const near = (x, y, abs, pct) => Math.abs(x - y) <= Math.max(abs, Math.max(x, y) * pct);
+  if (a.dealType === '월세') return near(a.deposit, b.deposit, 500, 0.2) && near(a.monthlyRent, b.monthlyRent, 5, 0.1);
+  return near(a.deposit, b.deposit, 0, 0.05);
 }
 
 /** 정규화된 매물 목록 → 동일 매물끼리 묶은 그룹 목록 */
@@ -45,10 +63,11 @@ export function dedupe(listings) {
     if (ri !== rj) parent[rj] = ri;
   };
 
-  // 동(洞) 단위로 버킷을 나눠 비교 횟수를 줄인다
+  // 동(洞) 단위로 버킷을 나눠 비교 횟수를 줄인다 (구 이름은 플랫폼마다 없을 수 있어 동만 사용)
   const buckets = new Map();
   listings.forEach((l, i) => {
-    const key = `${l.addr.sigungu}|${l.addr.dong}|${l.dealType}`;
+    const area = l.addr.dong || `geo:${l.lat.toFixed(2)},${l.lng.toFixed(2)}`;
+    const key = `${area}|${l.dealType}`;
     if (!buckets.has(key)) buckets.set(key, []);
     buckets.get(key).push(i);
   });
@@ -127,7 +146,7 @@ function buildGroup(members) {
     addr: withAddr.addr,
     lat: members.reduce((s, m) => s + m.lat, 0) / members.length,
     lng: members.reduce((s, m) => s + m.lng, 0) / members.length,
-    images: members.flatMap((m) => m.images),
+    images: members.flatMap((m) => m.images).slice(0, 6),
     updatedAt: members.map((m) => m.updatedAt).sort().at(-1),
     sources: [...new Set(members.map((m) => m.source))],
     offers,
@@ -151,24 +170,30 @@ function withTimeout(promise, ms, label) {
 
 /**
  * 모든 소스에서 매물을 수집한다. 일부 소스가 실패해도 나머지 결과로 응답한다.
+ * ctx 는 각 어댑터의 fetchRaw(ctx) 로 전달된다 (bbox, maxPages 등).
  */
-export async function collect({ timeoutMs = 8000, sources = getSources() } = {}) {
+export async function collect({ timeoutMs = 8000, sources = getSources(), ctx = {} } = {}) {
   const results = await Promise.allSettled(
     sources.map(async (src) => {
       const started = Date.now();
-      const raws = await withTimeout(Promise.resolve(src.fetchRaw()), timeoutMs, src.key);
+      const warnings = [];
+      const raws = await withTimeout(
+        Promise.resolve(src.fetchRaw({ ...ctx, warn: (msgs) => warnings.push(...(msgs ?? [])) })),
+        timeoutMs,
+        src.key,
+      );
       const listings = [];
       let failed = 0;
-      for (const raw of raws) {
+      for (const raw of raws ?? []) {
         try {
           const l = src.normalize(raw);
-          if (Number.isFinite(l.deposit) && Number.isFinite(l.areaM2)) listings.push(l);
+          if (isValidListing(l)) listings.push(l);
           else failed++;
         } catch {
           failed++;
         }
       }
-      return { src, listings, failed, ms: Date.now() - started };
+      return { listings, failed, warnings, ms: Date.now() - started };
     }),
   );
 
@@ -179,7 +204,7 @@ export async function collect({ timeoutMs = 8000, sources = getSources() } = {})
     const meta = { key: src.key, name: src.name, color: src.color, homepage: src.homepage };
     if (r.status === 'fulfilled') {
       listings.push(...r.value.listings);
-      status.push({ ...meta, ok: true, count: r.value.listings.length, normalizeFailed: r.value.failed, ms: r.value.ms });
+      status.push({ ...meta, ok: true, count: r.value.listings.length, normalizeFailed: r.value.failed, warnings: r.value.warnings.slice(0, 10), ms: r.value.ms });
     } else {
       status.push({ ...meta, ok: false, count: 0, error: r.reason?.message ?? String(r.reason) });
     }
@@ -187,30 +212,42 @@ export async function collect({ timeoutMs = 8000, sources = getSources() } = {})
   return { listings, status };
 }
 
+const DEALS = new Set(['매매', '전세', '월세']);
+export function isValidListing(l) {
+  return (
+    l &&
+    DEALS.has(l.dealType) &&
+    Number.isFinite(l.deposit) &&
+    Number.isFinite(l.monthlyRent) &&
+    Number.isFinite(l.areaM2) &&
+    l.areaM2 > 0 &&
+    Number.isFinite(l.lat) &&
+    Number.isFinite(l.lng)
+  );
+}
+
 /* ------------------------------------------------------------------ */
 
-const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS ?? 5 * 60 * 1000);
-let cache = null;
-let inflight = null;
+/** 기본 저장소 (서버에서 사용). 테스트는 별도 store 를 만들어 쓴다. */
+export const defaultStore = createStore({
+  // 모드별로 파일을 분리해 가상 데이터와 실제 데이터가 섞이지 않게 한다
+  file: process.env.NODE_ENV === 'test' ? null : fileURLToPath(new URL(`../data/listings.${dataMode()}.json`, import.meta.url)),
+});
 
-/** 캐시된 통합 데이터. TTL이 지나면 다시 수집한다. */
-export async function getAggregated({ force = false } = {}) {
-  if (!force && cache && Date.now() - cache.at < CACHE_TTL_MS) return cache;
-  inflight ??= (async () => {
-    try {
-      const { listings, status } = await collect();
-      const groups = dedupe(listings);
-      cache = {
-        at: Date.now(),
-        groups,
-        byId: new Map(groups.map((g) => [g.id, g])),
-        status,
-        stats: { rawCount: listings.length, groupCount: groups.length, duplicatesMerged: listings.length - groups.length },
-      };
-      return cache;
-    } finally {
-      inflight = null;
-    }
-  })();
-  return inflight;
+let cache = null;
+
+/** store 내용이 바뀌었을 때만 중복 통합을 다시 계산 */
+export function getAggregated(store = defaultStore) {
+  if (cache && cache.store === store && cache.version === store.version) return cache;
+  const listings = store.listings();
+  const groups = dedupe(listings);
+  cache = {
+    store,
+    version: store.version,
+    at: Date.now(),
+    groups,
+    byId: new Map(groups.map((g) => [g.id, g])),
+    stats: { rawCount: listings.length, groupCount: groups.length, duplicatesMerged: listings.length - groups.length },
+  };
+  return cache;
 }

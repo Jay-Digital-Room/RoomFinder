@@ -112,9 +112,10 @@ export function generateBaseListings(count = 80, seed = 20261101) {
       onZigbang: rand() < 0.6,
       onDabang: rand() < 0.55,
       onNaver: rand() < 0.65,
+      onPeterpan: rand() < 0.4,
     });
     const last = list[list.length - 1];
-    if (!last.onZigbang && !last.onDabang && !last.onNaver) last.onNaver = true;
+    if (!last.onZigbang && !last.onDabang && !last.onNaver && !last.onPeterpan) last.onNaver = true;
   }
   return list;
 }

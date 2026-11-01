@@ -1,4 +1,4 @@
-import { PYEONG_TO_M2, parseAddress, parseKoreanMoney, parseFloor, round1 } from '../model.js';
+import { PYEONG_TO_M2, parseAddress, parseKoreanMoney, parseFloor, round1 } from '../../model.js';
 import { baseListings, jitterCoord, jitterPrice, sourceRand } from './seed.js';
 
 /**

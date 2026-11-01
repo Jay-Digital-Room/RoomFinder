@@ -27,6 +27,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 html, body { height: 100%; }
 
@@ -167,9 +168,12 @@ legend { font-weight: 700; font-size: 13px; margin-bottom: 8px; color: var(--mut
 .map-wrap, #map { height: 100%; }
 .map-error { padding: 24px; color: var(--muted); }
 
+/* 오버레이 정렬: 오버레이 요소의 좌상단이 좌표에 놓이므로 CSS로 중심/하단 정렬 */
+.ov-bottom, .ov-center { position: absolute; left: 0; top: 0; width: 0; height: 0; }
+.ov-bottom > * { position: absolute; left: 0; bottom: 6px; transform: translateX(-50%); }
+.ov-center > * { position: absolute; left: 0; top: 0; transform: translate(-50%, -50%); }
+
 .pin {
-  position: relative;
-  transform: translate(-50%, -100%);
   display: inline-flex; align-items: center; gap: 4px;
   padding: 3px 8px; border-radius: 8px;
   background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; white-space: nowrap;
@@ -184,7 +188,8 @@ legend { font-weight: 700; font-size: 13px; margin-bottom: 8px; color: var(--mut
 .pin.deal-전세 { background: #8e44ad; --pin-bg: #8e44ad; }
 .pin.deal-매매 { background: #e67e22; --pin-bg: #e67e22; }
 .pin b { background: rgba(255, 255, 255, 0.25); border-radius: 4px; padding: 0 4px; font-size: 11px; }
-.pin.hl { transform: translate(-50%, -100%) scale(1.25); z-index: 1000; outline: 2px solid #fff; }
+.pin { cursor: pointer; }
+.pin.hl { transform: translateX(-50%) scale(1.25); z-index: 1000; outline: 2px solid #fff; }
 
 /* ---------- 상세 다이얼로그 ---------- */
 
@@ -258,7 +263,6 @@ h3 { font-size: 15px; margin: 16px 0 8px; }
 }
 
 .cluster {
-  transform: translate(-50%, -50%);
   display: grid; place-items: center;
   border-radius: 50%;
   background: color-mix(in srgb, var(--accent) 85%, transparent);
@@ -267,3 +271,21 @@ h3 { font-size: 15px; margin: 16px 0 8px; }
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
   cursor: pointer;
 }
+
+.src.running { color: var(--muted); }
+.src.running::before { animation: blink 1s infinite; }
+@keyframes blink { 50% { opacity: 0.2; } }
+.src sup { font-size: 10px; color: var(--muted); margin-left: 1px; }
+
+.map-wrap { position: relative; }
+.map-action {
+  position: absolute; z-index: 500; top: 12px; left: 50%; transform: translateX(-50%);
+  padding: 9px 16px; border: 0; border-radius: 999px;
+  background: var(--panel); color: var(--accent); font-weight: 700; cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+}
+.map-action:disabled { color: var(--muted); cursor: default; }
+
+.card.has-thumb { display: grid; grid-template-columns: 1fr 88px; column-gap: 12px; }
+.card.has-thumb > :not(.thumb) { grid-column: 1; }
+.thumb { grid-column: 2; grid-row: 1 / span 6; width: 88px; height: 88px; object-fit: cover; border-radius: 10px; background: var(--bg); }

@@ -1,4 +1,4 @@
-import { parseAddress, parseFloor, parseKoreanMoney, round1 } from '../model.js';
+import { parseAddress, parseFloor, parseKoreanMoney, round1 } from '../../model.js';
 import { baseListings, jitterCoord, jitterPrice, sourceRand } from './seed.js';
 
 /**

@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { collect, dedupe, isSameProperty } from '../server/aggregator.js';
 import { parseAddress } from '../server/model.js';
-import { baseListings } from '../server/sources/seed.js';
+import { baseListings } from '../server/sources/mock/seed.js';
+import { getSources } from '../server/sources/index.js';
 
 function listing(overrides) {
   const address = overrides.address ?? '서울 마포구 서교동 100-1';
@@ -49,6 +50,17 @@ test('층 비공개(null)는 어느 층과도 매칭 가능, 반지하와 B1은 
   assert.ok(isSameProperty(listing({ floor: -0.5 }), listing({ floor: -1 })));
 });
 
+test('좌표가 흐린 플랫폼끼리: 같은 동·층·비슷한 가격이면 300m 이내에서 같은 매물', () => {
+  const noJibun = (o) => listing({ address: '', addr: { sido: '', sigungu: '', dong: '서교동', jibun: '' }, ...o });
+  const a = noJibun({ source: 'zigbang', lat: 37.555, lng: 126.92 });
+  const b = noJibun({ source: 'dabang', lat: 37.5565, lng: 126.9205, monthlyRent: 62 }); // ~170m
+  assert.ok(isSameProperty(a, b));
+  // 층 정보가 없거나, 가격이 많이 다르거나, 동이 다르면 합치지 않음
+  assert.ok(!isSameProperty(a, { ...b, floor: null }));
+  assert.ok(!isSameProperty(a, { ...b, monthlyRent: 90 }));
+  assert.ok(!isSameProperty(a, { ...b, addr: { ...b.addr, dong: '망원동' } }));
+});
+
 test('그룹은 최저가를 대표 가격으로, 가격 차이를 계산한다', () => {
   const [g] = dedupe([
     listing({ id: 'zigbang:1', source: 'zigbang', monthlyRent: 65 }),
@@ -67,7 +79,7 @@ test('그룹 ID는 입력 순서와 무관하게 안정적', () => {
 });
 
 test('목업 데이터 전체: 실제 매물 수와 통합 결과가 일치하고 잘못 합쳐진 그룹이 없다', async () => {
-  const { listings, status } = await collect();
+  const { listings, status } = await collect({ sources: getSources('mock') });
   assert.ok(status.every((s) => s.ok && s.normalizeFailed === 0));
   const groups = dedupe(listings);
   assert.equal(groups.length, baseListings().length);

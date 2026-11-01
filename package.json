@@ -1,15 +1,19 @@
 {
   "name": "roomfinder",
   "version": "0.1.0",
-  "description": "여러 부동산 플랫폼(직방·다방·네이버부동산 등)의 매물을 한곳에서 비교하는 통합 검색 서비스",
+  "description": "여러 부동산 플랫폼(직방·다방·네이버부동산·피터팬)의 매물을 한곳에서 비교하는 개인용 통합 검색 서비스",
   "type": "module",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
+    "mock": "node server/index.js --mock",
+    "crawl": "node scripts/crawl.js",
     "test": "node --test \"test/**/*.test.js\""
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=22"
+  },
   "license": "UNLICENSED",
   "private": true
 }

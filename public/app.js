@@ -1,4 +1,5 @@
 /* RoomFinder 프론트엔드 — 프레임워크 없이 동작하는 단일 모듈 */
+import { createMap } from './maps/index.js';
 
 const $ = (sel) => document.querySelector(sel);
 const state = {
@@ -96,7 +97,7 @@ function buildParams(page) {
   for (const id of BOOL_FIELDS) if ($(`#${id}`).checked) p.set(id, 'true');
   if ($('#boundsOnly').checked && map) {
     const b = map.getBounds();
-    p.set('bounds', [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()].map((n) => n.toFixed(5)).join(','));
+    p.set('bounds', [b.south, b.west, b.north, b.east].map((n) => n.toFixed(5)).join(','));
   }
   p.set('sort', state.sort);
   p.set('page', page);
@@ -136,7 +137,8 @@ function cardHtml(g) {
     ? `<span class="gap">플랫폼 간 최대 ${g.priceGap.monthlyRent ? `월 ${g.priceGap.monthlyRent}만` : `${formatMoney(Math.abs(g.priceGap.deposit))}만`} 차이</span>`
     : '';
   return `
-    <li class="card" data-id="${g.id}" tabindex="0" role="button" aria-label="${esc(g.title)} 상세 보기">
+    <li class="card${g.image ? ' has-thumb' : ''}" data-id="${g.id}" tabindex="0" role="button" aria-label="${esc(g.title)} 상세 보기">
+      ${g.image ? `<img class="thumb" src="${esc(g.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()" />` : ''}
       <div class="card-top">
         <span class="room-type">${esc(g.roomType)}</span>
         <span class="updated">${timeAgo(g.updatedAt)}</span>
@@ -184,7 +186,13 @@ async function load({ append }) {
   if (append) cards.insertAdjacentHTML('beforeend', data.items.map(cardHtml).join(''));
   else cards.innerHTML = data.items.length
     ? data.items.map(cardHtml).join('')
-    : '<li class="empty">조건에 맞는 매물이 없어요. 필터를 조정해 보세요.</li>';
+    : `<li class="empty">${
+        state.meta?.stats.rawCount === 0
+          ? state.meta.crawling
+            ? '매물을 수집하는 중이에요. 잠시만 기다려 주세요…'
+            : '아직 수집된 매물이 없어요. 지도에서 원하는 지역으로 이동한 뒤 <b>이 지역 매물 불러오기</b>를 눌러 보세요.'
+          : '조건에 맞는 매물이 없어요. 필터를 조정해 보세요.'
+      }</li>`;
 
   $('#resultCount').innerHTML = `매물 <strong>${data.total.toLocaleString()}</strong>개`;
   $('#loadMore').hidden = state.items.length >= data.total;
@@ -193,25 +201,15 @@ async function load({ append }) {
 
 /* ---------- 지도 ---------- */
 
-let map = null;
-let markerLayer = null;
-const markerById = new Map();
+let map = null; // public/maps/index.js 의 공통 인터페이스 (카카오/네이버/Leaflet)
 
-function initMap() {
-  if (!window.L) {
-    $('#map').innerHTML = '<p class="map-error">지도를 불러오지 못했습니다.</p>';
-    return;
-  }
-  map = L.map('map', { zoomControl: true }).setView([37.53, 126.99], 12);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '&copy; OpenStreetMap contributors',
-  }).addTo(map);
-  markerLayer = L.layerGroup().addTo(map);
-
+async function initMap(config) {
+  map = await createMap($('#map'), config);
+  document.body.dataset.mapProvider = map.name;
+  if (lastMarkers.length) renderMarkers(lastMarkers);
   let t;
-  map.on('zoomend', () => renderMarkers(lastMarkers));
-  map.on('moveend', () => {
+  map.onIdle(() => {
+    renderMarkers(lastMarkers); // 확대/축소에 따라 클러스터 다시 계산
     if (!$('#boundsOnly').checked) return;
     clearTimeout(t);
     t = setTimeout(refresh, 300);
@@ -226,18 +224,41 @@ function shortPrice(m) {
 let lastMarkers = [];
 let fittedOnce = false;
 const CLUSTER_PX = 70;
-const CLUSTER_UNTIL_ZOOM = 15;
+const CLUSTER_ABOVE_M_PER_PX = 5; // 이보다 축소된 화면이면 클러스터링 (대략 줌 15 미만)
 
-/** 화면 픽셀 격자 기준의 간단한 클러스터링 (줌아웃 시 핀이 겹치지 않도록) */
+/**
+ * 위경도 격자 기반 클러스터링 — 지도 종류와 무관하게 동작.
+ * 격자 크기는 현재 화면의 "픽셀당 거리"로 정한다.
+ */
 function clusterMarkers(markers) {
+  const b = map.getBounds();
+  const widthPx = $('#map').clientWidth || 800;
+  const heightPx = $('#map').clientHeight || 600;
+  const cellLng = ((b.east - b.west) / widthPx) * CLUSTER_PX;
+  const cellLat = ((b.north - b.south) / heightPx) * CLUSTER_PX;
+  const metersPerPx = ((b.east - b.west) * 88000) / widthPx;
+  if (!(metersPerPx > CLUSTER_ABOVE_M_PER_PX)) return markers.map((m) => [m]);
+
   const cells = new Map();
   for (const m of markers) {
-    const p = map.project([m.lat, m.lng], map.getZoom());
-    const key = `${Math.floor(p.x / CLUSTER_PX)}:${Math.floor(p.y / CLUSTER_PX)}`;
+    const key = `${Math.floor(m.lng / cellLng)}:${Math.floor(m.lat / cellLat)}`;
     if (!cells.has(key)) cells.set(key, []);
     cells.get(key).push(m);
   }
   return [...cells.values()];
+}
+
+function el(html, onClick) {
+  const wrap = document.createElement('div');
+  wrap.innerHTML = html.trim();
+  const node = wrap.firstChild;
+  if (onClick) {
+    node.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onClick();
+    });
+  }
+  return node;
 }
 
 function renderMarkers(markers) {
@@ -245,39 +266,37 @@ function renderMarkers(markers) {
   lastMarkers = markers;
   if (!fittedOnce && markers.length) {
     fittedOnce = true;
-    map.fitBounds(L.latLngBounds(markers.map((m) => [m.lat, m.lng])), { padding: [40, 40] });
+    map.fitTo(markers);
+    return; // fitTo 이후 idle 이벤트에서 다시 그려짐
   }
-  markerLayer.clearLayers();
-  markerById.clear();
 
-  const groups = map.getZoom() < CLUSTER_UNTIL_ZOOM ? clusterMarkers(markers) : markers.map((m) => [m]);
-  for (const g of groups) {
+  const overlays = [];
+  for (const g of clusterMarkers(markers)) {
     if (g.length > 1) {
       const lat = g.reduce((s, m) => s + m.lat, 0) / g.length;
       const lng = g.reduce((s, m) => s + m.lng, 0) / g.length;
-      const size = Math.min(60, 30 + Math.sqrt(g.length) * 5);
-      const icon = L.divIcon({
-        className: '',
-        html: `<div class="cluster" style="width:${size}px;height:${size}px">${g.length}</div>`,
-        iconSize: null,
-      });
-      markerLayer.addLayer(
-        L.marker([lat, lng], { icon, title: `매물 ${g.length}개` }).on('click', () =>
-          map.fitBounds(L.latLngBounds(g.map((m) => [m.lat, m.lng])), { padding: [60, 60], maxZoom: CLUSTER_UNTIL_ZOOM + 1 }),
+      const size = Math.round(Math.min(60, 30 + Math.sqrt(g.length) * 5));
+      overlays.push({
+        lat,
+        lng,
+        el: el(
+          `<div class="ov-center"><div class="cluster" style="width:${size}px;height:${size}px" title="매물 ${g.length}개">${g.length}</div></div>`,
+          () => map.fitTo(g, { padding: 60, maxZoomIn: true }),
         ),
-      );
+      });
       continue;
     }
     const m = g[0];
-    const icon = L.divIcon({
-      className: '',
-      html: `<div class="pin deal-${m.dealType}">${shortPrice(m)}${m.n > 1 ? `<b>${m.n}</b>` : ''}</div>`,
-      iconSize: null,
+    overlays.push({
+      lat: m.lat,
+      lng: m.lng,
+      el: el(
+        `<div class="ov-bottom"><div class="pin deal-${m.dealType}" data-mid="${m.id}" title="${shortPrice(m)}">${shortPrice(m)}${m.n > 1 ? `<b>${m.n}</b>` : ''}</div></div>`,
+        () => openDetail(m.id),
+      ),
     });
-    const marker = L.marker([m.lat, m.lng], { icon, title: shortPrice(m) }).on('click', () => openDetail(m.id));
-    markerLayer.addLayer(marker);
-    markerById.set(m.id, marker);
   }
+  map.setOverlays(overlays);
 }
 
 /* ---------- 상세 ---------- */
@@ -349,8 +368,68 @@ async function openDetail(id) {
   `;
   $('#closeDetail').onclick = () => dlg.close();
 
-  if (map) {
-    map.setView([g.lat, g.lng], Math.max(map.getZoom(), 15));
+  map?.focus(g);
+}
+
+/* ---------- 수집 상태 ---------- */
+
+function renderSourceBar() {
+  const { sources, stats, crawling, dataMode } = state.meta;
+  const ago = (iso) => (iso ? timeAgo(iso) : '아직 안 함');
+  $('#sourceBar').innerHTML =
+    sources
+      .map((s) => {
+        const cls = s.running ? 'running' : s.error ? 'fail' : 'ok';
+        const label = s.running ? '수집 중…' : s.error ? '오류' : `${s.count}`;
+        const tip = s.error
+          ? `마지막 시도 ${ago(s.lastRunAt)} 실패: ${s.error}`
+          : `마지막 수집 ${ago(s.lastOkAt)}${s.warnings?.length ? ` · 경고 ${s.warnings.length}건` : ''}`;
+        return `<span class="src ${cls}" style="--c:${s.color}" title="${esc(tip)}">${esc(s.name)} ${label}${s.verified ? '' : '<sup title="응답 형식이 검증되지 않은 수집기">β</sup>'}</span>`;
+      })
+      .join('') +
+    `<span class="src-summary">${dataMode === 'mock' ? '<b>가상 데이터</b> · ' : ''}${crawling ? '수집 중 · ' : ''}원본 ${stats.rawCount}건 → 중복 ${stats.duplicatesMerged}건 통합</span>`;
+}
+
+let crawlTimer = null;
+function watchCrawl() {
+  clearTimeout(crawlTimer);
+  $('#crawlHere').disabled = true;
+  $('#crawlHere').textContent = '불러오는 중…';
+  const tick = async () => {
+    try {
+      const r = await fetch('/api/crawl').then((x) => x.json());
+      Object.assign(state.meta, { sources: r.sources, stats: r.stats, crawling: r.crawling });
+      renderSourceBar();
+      if (r.crawling) {
+        crawlTimer = setTimeout(tick, 2500);
+        return;
+      }
+    } catch {
+      crawlTimer = setTimeout(tick, 5000);
+      return;
+    }
+    $('#crawlHere').disabled = false;
+    $('#crawlHere').textContent = '이 지역 매물 불러오기';
+    refresh();
+  };
+  crawlTimer = setTimeout(tick, 1500);
+}
+
+async function crawlHere() {
+  if (!map) return;
+  const b = map.getBounds();
+  const res = await fetch('/api/crawl', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ bounds: [b.south, b.west, b.north, b.east].map((n) => n.toFixed(5)).join(',') }),
+  });
+  if (res.status === 202 || res.status === 409) {
+    state.meta.crawling = true;
+    renderSourceBar();
+    watchCrawl();
+  } else {
+    const { error } = await res.json().catch(() => ({}));
+    alert(error ?? '수집 요청 실패');
   }
 }
 
@@ -358,16 +437,18 @@ async function openDetail(id) {
 
 async function init() {
   restoreFromUrl();
-  initMap();
-
   const res = await fetch('/api/meta');
   state.meta = await res.json();
+  // 지도 SDK 로드는 목록 표시를 막지 않도록 기다리지 않는다
+  initMap(state.meta.map).catch((err) => {
+    console.error(err);
+    $('#map').innerHTML = '<p class="map-error">지도를 불러오지 못했습니다.</p>';
+  });
 
-  $('#sourceBar').innerHTML =
-    state.meta.sources
-      .map((s) => `<span class="src ${s.ok ? 'ok' : 'fail'}" style="--c:${s.color}" title="${s.ok ? `${s.ms}ms` : esc(s.error)}">${esc(s.name)} ${s.ok ? s.count : '오류'}</span>`)
-      .join('') +
-    `<span class="src-summary">원본 ${state.meta.stats.rawCount}건 → 중복 ${state.meta.stats.duplicatesMerged}건 통합</span>`;
+  renderSourceBar();
+  if (state.meta.dataMode === 'live') $('#crawlHere').hidden = false;
+  $('#crawlHere').addEventListener('click', crawlHere);
+  if (state.meta.crawling) watchCrawl();
 
   renderChips($('#dealTypeChips'), state.meta.dealTypes, state.filters.dealType);
   renderChips($('#roomTypeChips'), state.meta.roomTypes, state.filters.roomType);
@@ -439,7 +520,7 @@ async function init() {
   cards.addEventListener('mouseover', (e) => {
     const card = e.target.closest('.card');
     document.querySelectorAll('.pin.hl').forEach((p) => p.classList.remove('hl'));
-    if (card) markerById.get(card.dataset.id)?.getElement()?.querySelector('.pin')?.classList.add('hl');
+    if (card) document.querySelector(`#map .pin[data-mid="${card.dataset.id}"]`)?.classList.add('hl');
   });
 
   $('#detail').addEventListener('click', (e) => {
@@ -453,7 +534,7 @@ async function init() {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.mobile-tabs button').forEach((b) => b.classList.toggle('active', b === btn));
       document.body.dataset.view = btn.dataset.view;
-      if (btn.dataset.view === 'map') setTimeout(() => map?.invalidateSize(), 50);
+      if (btn.dataset.view === 'map') setTimeout(() => map?.relayout(), 50);
     }),
   );
 
