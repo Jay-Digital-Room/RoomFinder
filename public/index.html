@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>RoomFinder · 부동산 매물 통합검색</title>
+  <meta name="description" content="직방·다방·네이버부동산 매물을 한 번에 비교하세요" />
+  <meta name="theme-color" content="#1f6feb" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">
+      <img src="/icon.svg" alt="" width="28" height="28" />
+      <span>RoomFinder</span>
+    </a>
+    <form class="search" id="searchForm" role="search">
+      <input id="q" type="search" placeholder="지역, 역, 매물명 검색 (예: 망원동, 홍대입구역)" autocomplete="off" />
+    </form>
+    <button class="icon-btn filter-toggle" id="filterToggle" aria-label="필터 열기">필터</button>
+  </header>
+
+  <div class="source-bar" id="sourceBar" aria-label="수집 소스 상태"></div>
+
+  <main class="layout">
+    <aside class="filters" id="filters" aria-label="검색 필터">
+      <div class="filters-head">
+        <h2>필터</h2>
+        <button type="button" class="link" id="resetFilters">초기화</button>
+      </div>
+
+      <fieldset>
+        <legend>거래 유형</legend>
+        <div class="chips" id="dealTypeChips"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>방 종류</legend>
+        <div class="chips" id="roomTypeChips"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>플랫폼</legend>
+        <div class="chips" id="sourceChips"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>보증금·매매가 (만원)</legend>
+        <div class="range">
+          <input type="number" id="depositMin" placeholder="최소" min="0" step="500" inputmode="numeric" />
+          <span>~</span>
+          <input type="number" id="depositMax" placeholder="최대" min="0" step="500" inputmode="numeric" />
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>월세 (만원)</legend>
+        <div class="range">
+          <input type="number" id="rentMin" placeholder="최소" min="0" step="5" inputmode="numeric" />
+          <span>~</span>
+          <input type="number" id="rentMax" placeholder="최대" min="0" step="5" inputmode="numeric" />
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>전용면적 (㎡)</legend>
+        <div class="range">
+          <input type="number" id="areaMin" placeholder="최소" min="0" inputmode="numeric" />
+          <span>~</span>
+          <input type="number" id="areaMax" placeholder="최대" min="0" inputmode="numeric" />
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>비교</legend>
+        <label class="check"><input type="checkbox" id="multiSourceOnly" /> 2곳 이상에 올라온 매물만</label>
+        <label class="check"><input type="checkbox" id="priceGapOnly" /> 플랫폼 간 가격 차이 있는 매물만</label>
+        <label class="check"><input type="checkbox" id="boundsOnly" /> 지도 화면 안의 매물만</label>
+      </fieldset>
+
+      <button type="button" class="primary only-mobile" id="applyFilters">결과 보기</button>
+    </aside>
+
+    <section class="results" aria-label="검색 결과">
+      <div class="results-head">
+        <p id="resultCount" aria-live="polite">불러오는 중…</p>
+        <select id="sort" aria-label="정렬">
+          <option value="recent">최신순</option>
+          <option value="priceAsc">가격 낮은순</option>
+          <option value="priceDesc">가격 높은순</option>
+          <option value="areaDesc">넓은순</option>
+          <option value="sources">많은 플랫폼순</option>
+        </select>
+      </div>
+      <ul class="cards" id="cards"></ul>
+      <button class="more" id="loadMore" hidden>더 보기</button>
+    </section>
+
+    <section class="map-wrap" aria-label="지도">
+      <div id="map"></div>
+    </section>
+  </main>
+
+  <nav class="mobile-tabs" aria-label="보기 전환">
+    <button data-view="list" class="active">목록</button>
+    <button data-view="map">지도</button>
+  </nav>
+
+  <dialog id="detail" aria-labelledby="detailTitle">
+    <div class="detail-body" id="detailBody"></div>
+  </dialog>
+
+  <script src="/vendor/leaflet/leaflet.js"></script>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
