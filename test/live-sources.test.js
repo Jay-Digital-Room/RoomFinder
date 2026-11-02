@@ -214,6 +214,34 @@ test('네이버: 매매가·층 비공개("고/15")', () => {
   assert.deepEqual([l.dealType, l.deposit, l.monthlyRent, l.roomType, l.floor, l.totalFloors], ['매매', 135000, 0, '아파트', null, 15]);
 });
 
+test('네이버: 조건 형식이 검증 오류(400)면 기본 형식으로 재시도하고 그 형식을 기억', async () => {
+  const fst = { status: 400, body: { detailCode: 'FST_ERR_VALIDATION', message: '' } };
+  routes = [['boundedArticles', (_, init) => {
+    const body = JSON.parse(init.body);
+    if (body.filter.realEstateTypes.includes('C01')) return fst; // 예: 원룸 코드를 거부하는 서버
+    return { isSuccess: true, result: { list: [naverItem(1)], hasNextPage: false } };
+  }]];
+  const conditions = { dealTypes: ['월세'], roomTypes: ['원룸'], depositMax: null, rentMax: null };
+  const warnings = [];
+  const raws = await naver.fetchRaw({ ...ctx, conditions, warn: (w) => warnings.push(...w) });
+  assert.equal(raws.length, 1);
+  assert.equal(calls.length, 2);
+  assert.match(warnings[0], /기본 형식/);
+  const sent = JSON.parse(calls[1].init.body);
+  assert.equal(sent.articlePagingRequest.size, 20);
+  assert.equal(sent.articlePagingRequest.articleSortType, 'RANKING_DESC');
+
+  // 다음 수집은 처음부터 기본 형식 → 요청 1번
+  calls.length = 0;
+  await naver.fetchRaw({ ...ctx, conditions });
+  assert.equal(calls.length, 1);
+});
+
+test('네이버: 두 형식 모두 거절되면 보낸 요청을 오류에 포함', async () => {
+  routes = [['boundedArticles', () => ({ status: 400, body: { detailCode: 'FST_ERR_VALIDATION', message: '' } })]];
+  await assert.rejects(naver.fetchRaw({ ...ctx, conditions: { dealTypes: ['월세'], roomTypes: ['원룸'] } }), (err) => /보낸 요청: \{"filter"/.test(err.message));
+});
+
 test('네이버: 429 를 받으면 재시도하지 않고 쿨다운', async () => {
   routes = [['boundedArticles', () => ({ status: 429, body: {} })]];
   await assert.rejects(naver.fetchRaw(ctx), (err) => err.status === 429);

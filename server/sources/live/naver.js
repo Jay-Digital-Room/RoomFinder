@@ -38,15 +38,28 @@ function http(ctx) {
 const TRADE_CODE = { 매매: 'A1', 전세: 'B1', 월세: 'B2' };
 const ROOM_CODES = { 원룸: ['C01'], 투룸: ['C01', 'C02'], '쓰리룸+': ['C02'], 빌라: ['C02'], 오피스텔: ['A02'], 아파트: ['A01'] };
 
-function payload(bbox, paging, conditions) {
-  const tradeTypes = conditions ? conditions.dealTypes.map((d) => TRADE_CODE[d]) : ['A1', 'B1', 'B2'];
-  const realEstateTypes = conditions
-    ? [...new Set(conditions.roomTypes.flatMap((r) => ROOM_CODES[r] ?? []))]
-    : ['C01', 'C02', 'A02', 'A01'];
+/** 공개 참고 구현의 기본 필터 (검증을 통과한다고 알려진 형식) */
+const SAFE_TRADE = ['A1', 'B1', 'B2'];
+const SAFE_REAL_ESTATE = ['A01', 'A02', 'A05', 'A06', 'A07', 'C02'];
+
+/**
+ * 요청 형식 후보. 네이버는 어떤 항목이 틀렸는지 알려주지 않으므로(FST_ERR_VALIDATION),
+ * 조건을 반영한 형식이 거절되면 참고 구현의 기본 형식으로 다시 시도한다 (조건은 수집 후 걸러냄).
+ */
+export const VARIANTS = [
+  { name: '조건 반영', useConditions: true },
+  { name: '기본 형식', useConditions: false },
+];
+let preferredVariant = 0; // 한 번 통과한 형식은 다음 수집에도 사용
+
+export function payload(bbox, paging, conditions, variant = VARIANTS[0]) {
+  const c = variant.useConditions ? conditions : null;
+  const tradeTypes = c ? c.dealTypes.map((d) => TRADE_CODE[d]) : SAFE_TRADE;
+  const realEstateTypes = c ? [...new Set(c.roomTypes.flatMap((r) => ROOM_CODES[r] ?? []))] : SAFE_REAL_ESTATE;
   const range = {};
   // 가격 필터는 "원" 단위. 다른 거래유형은 걸러내지 않는다(네이버 동작)
-  if (conditions?.depositMax) range.warrantyPrice = { max: conditions.depositMax * 10000 };
-  if (conditions?.rentMax) range.rentPrice = { max: conditions.rentMax * 10000 };
+  if (c?.depositMax) range.warrantyPrice = { max: c.depositMax * 10000 };
+  if (c?.rentMax) range.rentPrice = { max: c.rentMax * 10000 };
   return {
     filter: {
       tradeTypes,
@@ -72,9 +85,9 @@ function payload(bbox, paging, conditions) {
     precision: 16,
     // 첫 요청은 seed/lastInfo 없이 (null 로 보내면 검증 오류). 다음 페이지부터 응답의 값을 그대로
     articlePagingRequest: {
-      size: 50,
+      size: 20, // 참고 구현과 같게 (큰 값은 검증에서 거절될 수 있음)
       userChannelType: 'PC',
-      articleSortType: 'DATE_DESC',
+      articleSortType: 'RANKING_DESC',
       ...(paging?.seed != null && { seed: paging.seed }),
       ...(paging?.lastInfo != null && { lastInfo: paging.lastInfo }),
     },
@@ -96,13 +109,26 @@ export default {
     const maxPages = ctx.maxPages ?? 5;
     const out = [];
     let paging = null; // { seed, lastInfo } — 응답에서 받은 커서
+    let vi = ctx.conditions ? preferredVariant : 1;
+    const failures = [];
 
     for (let page = 1; page <= maxPages; page++) {
       let res;
       try {
-        res = await api.request(URL_, { method: 'POST', body: payload(ctx.bbox, paging, ctx.conditions) });
+        res = await api.request(URL_, { method: 'POST', body: payload(ctx.bbox, paging, ctx.conditions, VARIANTS[vi]) });
       } catch (err) {
         if (err.status === 429) blockedUntil = Date.now() + COOLDOWN_MS;
+        // 형식 검증 오류 → 다음 형식으로 재시도 (첫 페이지에서만)
+        if (err.status === 400 && page === 1 && vi < VARIANTS.length - 1) {
+          failures.push(`${VARIANTS[vi].name} 형식 거절: ${err.message.split(' — ')[1] ?? err.message}`);
+          vi++;
+          page--;
+          continue;
+        }
+        if (failures.length) err.message += ` (앞서 ${failures.join(' / ')})`;
+        if (err.status === 400) {
+          err.message += ` · 보낸 요청: ${JSON.stringify(payload(ctx.bbox, null, ctx.conditions, VARIANTS[vi])).slice(0, 600)}`;
+        }
         if (out.length) {
           ctx.warn?.([`page ${page}: ${err.message}`]);
           break;
@@ -112,6 +138,12 @@ export default {
       if (res.isSuccess === false) {
         if (res.detailCode === 'TOO_MANY_REQUESTS') blockedUntil = Date.now() + COOLDOWN_MS;
         throw new Error(`네이버 응답 오류: ${res.detailCode ?? ''} ${res.message ?? ''}`.trim());
+      }
+      if (page === 1) {
+        if (vi !== preferredVariant && ctx.conditions) {
+          ctx.warn?.([`네이버가 조건 반영 형식을 거절해 '${VARIANTS[vi].name}'으로 수집했어요 (조건은 수집 후 걸러냄)`, ...failures]);
+        }
+        if (ctx.conditions) preferredVariant = vi;
       }
       const r = res.result ?? {};
       for (const item of r.list ?? []) out.push(item);
