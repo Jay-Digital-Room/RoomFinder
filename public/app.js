@@ -12,6 +12,7 @@ const state = {
   },
   sort: 'recent',
   page: 1,
+  selection: null, // { ids: string[], label } — 지도에서 고른 건물
   items: [],
   total: 0,
 };
@@ -95,7 +96,9 @@ function buildParams(page) {
     if (v !== '') p.set(id, v);
   }
   for (const id of BOOL_FIELDS) if ($(`#${id}`).checked) p.set(id, 'true');
-  if ($('#boundsOnly').checked && map) {
+  if (state.selection) {
+    p.set('ids', state.selection.ids.join(','));
+  } else if ($('#boundsOnly').checked && map) {
     const b = map.getBounds();
     p.set('bounds', [b.south, b.west, b.north, b.east].map((n) => n.toFixed(5)).join(','));
   }
@@ -111,6 +114,7 @@ function syncUrl() {
   p.delete('page');
   p.delete('pageSize');
   p.delete('bounds');
+  p.delete('ids');
   if (p.get('sort') === 'recent') p.delete('sort');
   history.replaceState(null, '', p.toString() ? `?${p}` : location.pathname);
 }
@@ -156,16 +160,17 @@ function cardHtml(g) {
 
 let fetchSeq = 0;
 
-async function refresh() {
+/** markers=false: 지도 이동처럼 목록만 바뀌면 되는 경우 (지도 핀은 그대로) */
+async function refresh({ markers = true } = {}) {
   state.page = 1;
   syncUrl();
-  await load({ append: false });
+  await load({ append: false, markers });
 }
 
-async function load({ append }) {
+async function load({ append, markers = false }) {
   const seq = ++fetchSeq;
   const params = buildParams(state.page);
-  if (!append) params.set('markers', 'true');
+  if (markers) params.set('markers', 'true');
   $('#resultCount').textContent = '불러오는 중…';
 
   let data;
@@ -194,7 +199,9 @@ async function load({ append }) {
           : '조건에 맞는 매물이 없어요. 필터를 조정해 보세요.'
       }</li>`;
 
-  $('#resultCount').innerHTML = `매물 <strong>${data.total.toLocaleString()}</strong>개`;
+  const scope = state.selection ? '선택한 건물 매물' : $('#boundsOnly').checked && map ? '지도 영역 매물' : '매물';
+  $('#resultCount').innerHTML = `${scope} <strong>${data.total.toLocaleString()}</strong>개`;
+  if (!append) $('.results').scrollTop = 0; // 새 목록은 맨 위부터
   $('#loadMore').hidden = state.items.length >= data.total;
   if (data.markers) renderMarkers(data.markers);
 }
@@ -211,9 +218,10 @@ async function initMap(config) {
   let t;
   map.onIdle(() => {
     renderMarkers(lastMarkers); // 확대/축소에 따라 클러스터 다시 계산
-    if (!$('#boundsOnly').checked) return;
+    // 목록이 지도를 따라가게 (건물을 선택해 둔 동안에는 목록 유지)
+    if (!$('#boundsOnly').checked || state.selection) return;
     clearTimeout(t);
-    t = setTimeout(refresh, 300);
+    t = setTimeout(() => refresh({ markers: false }), 300);
   });
 }
 
@@ -240,14 +248,35 @@ const CLUSTER_ABOVE_M_PER_PX = 5; // 이보다 축소된 화면이면 클러스�
  * 위경도 격자 기반 클러스터링 — 지도 종류와 무관하게 동작.
  * 격자 크기는 현재 화면의 "픽셀당 거리"로 정한다.
  */
+function isZoomedOut() {
+  const b = map.getBounds();
+  const widthPx = $('#map').clientWidth || 800;
+  return ((b.east - b.west) * 88000) / widthPx > CLUSTER_ABOVE_M_PER_PX;
+}
+
+const BUILDING_M = 25; // 이 거리 안의 매물은 같은 건물로 묶음 (사이트들이 좌표를 조금씩 흐려서 줌)
+
+/** 가까운 매물끼리 건물 단위로 묶기 */
+function groupByBuilding(markers) {
+  const groups = [];
+  const near = (a, b) => {
+    const dy = (a.lat - b.lat) * 111000;
+    const dx = (a.lng - b.lng) * 88000;
+    return dx * dx + dy * dy <= BUILDING_M * BUILDING_M;
+  };
+  for (const m of markers) {
+    const g = groups.find((gr) => near(gr[0], m));
+    g ? g.push(m) : groups.push([m]);
+  }
+  return groups;
+}
+
 function clusterMarkers(markers) {
   const b = map.getBounds();
   const widthPx = $('#map').clientWidth || 800;
   const heightPx = $('#map').clientHeight || 600;
   const cellLng = ((b.east - b.west) / widthPx) * CLUSTER_PX;
   const cellLat = ((b.north - b.south) / heightPx) * CLUSTER_PX;
-  const metersPerPx = ((b.east - b.west) * 88000) / widthPx;
-  if (!(metersPerPx > CLUSTER_ABOVE_M_PER_PX)) return markers.map((m) => [m]);
 
   const cells = new Map();
   for (const m of markers) {
@@ -281,7 +310,26 @@ function renderMarkers(markers) {
   }
 
   const overlays = [];
-  for (const g of clusterMarkers(markers)) {
+  const zoomedOut = isZoomedOut();
+  const groups = zoomedOut ? clusterMarkers(markers) : groupByBuilding(markers);
+  const selected = new Set(state.selection?.ids ?? []);
+  for (const g of groups) {
+    if (!zoomedOut && g.length > 1) {
+      // 같은 건물(가까운 위치)의 매물 묶음 → 누르면 목록에 그 매물들만
+      const lat = g.reduce((s, m) => s + m.lat, 0) / g.length;
+      const lng = g.reduce((s, m) => s + m.lng, 0) / g.length;
+      const cheapest = [...g].sort((a, b) => a.monthlyRent - b.monthlyRent || a.deposit - b.deposit)[0];
+      const isSel = g.every((m) => selected.has(m.id));
+      overlays.push({
+        lat,
+        lng,
+        el: el(
+          `<div class="ov-bottom"><div class="pin building${isSel ? ' sel' : ''}" data-mids="${g.map((m) => m.id).join(' ')}" title="이 건물 매물 ${g.length}개 보기"><span class="cnt">${g.length}개</span>${shortPrice(cheapest)}~</div></div>`,
+          () => selectBuilding(g),
+        ),
+      });
+      continue;
+    }
     if (g.length > 1) {
       const lat = g.reduce((s, m) => s + m.lat, 0) / g.length;
       const lng = g.reduce((s, m) => s + m.lng, 0) / g.length;
@@ -291,7 +339,10 @@ function renderMarkers(markers) {
         lng,
         el: el(
           `<div class="ov-center"><div class="cluster" style="width:${size}px;height:${size}px" title="매물 ${g.length}개">${g.length}</div></div>`,
-          () => map.fitTo(g, { padding: 60, maxZoomIn: true }),
+          () => {
+            clearSelection({ reload: false });
+            map.fitTo(g, { padding: 60, maxZoomIn: true }); // 확대되면 목록도 그 영역으로 바뀜
+          },
         ),
       });
       continue;
@@ -301,12 +352,36 @@ function renderMarkers(markers) {
       lat: m.lat,
       lng: m.lng,
       el: el(
-        `<div class="ov-bottom"><div class="pin deal-${m.dealType}" data-mid="${m.id}" title="${shortPrice(m)}">${shortPrice(m)}${m.n > 1 ? `<b>${m.n}</b>` : ''}</div></div>`,
+        `<div class="ov-bottom"><div class="pin deal-${m.dealType}${selected.has(m.id) ? ' sel' : ''}" data-mid="${m.id}" title="${shortPrice(m)}">${shortPrice(m)}${m.n > 1 ? `<b>${m.n}</b>` : ''}</div></div>`,
         () => openDetail(m.id),
       ),
     });
   }
   map.setOverlays(overlays);
+}
+
+/* ---------- 건물 선택 ---------- */
+
+function showList() {
+  // 모바일 지도 화면에서 건물을 고르면 목록 탭으로 전환
+  if (document.body.dataset.view === 'map') document.querySelector('.mobile-tabs [data-view="list"]')?.click();
+}
+
+function selectBuilding(group) {
+  state.selection = { ids: group.map((m) => m.id), label: `선택한 건물 · 매물 ${group.length}개` };
+  $('#selectionLabel').textContent = state.selection.label;
+  $('#selection').hidden = false;
+  renderMarkers(lastMarkers); // 선택 표시
+  showList();
+  refresh({ markers: false });
+}
+
+function clearSelection({ reload = true } = {}) {
+  if (!state.selection) return;
+  state.selection = null;
+  $('#selection').hidden = true;
+  renderMarkers(lastMarkers);
+  if (reload) refresh({ markers: false });
 }
 
 /* ---------- 상세 ---------- */
@@ -596,7 +671,8 @@ async function init() {
       numTimer = setTimeout(refresh, 400);
     });
   }
-  for (const id of [...BOOL_FIELDS, 'boundsOnly']) $(`#${id}`).addEventListener('change', refresh);
+  for (const id of [...BOOL_FIELDS, 'boundsOnly']) $(`#${id}`).addEventListener('change', () => refresh());
+  $('#clearSelection').addEventListener('click', () => clearSelection());
 
   $('#sort').addEventListener('change', (e) => {
     state.sort = e.target.value;
@@ -610,7 +686,9 @@ async function init() {
 
   $('#resetFilters').addEventListener('click', () => {
     history.replaceState(null, '', location.pathname);
-    $('#boundsOnly').checked = false;
+    $('#boundsOnly').checked = true;
+    state.selection = null;
+    $('#selection').hidden = true;
     restoreFromUrl();
     document.querySelectorAll('.chip.on').forEach((c) => {
       c.classList.remove('on');
@@ -634,7 +712,10 @@ async function init() {
   cards.addEventListener('mouseover', (e) => {
     const card = e.target.closest('.card');
     document.querySelectorAll('.pin.hl').forEach((p) => p.classList.remove('hl'));
-    if (card) document.querySelector(`#map .pin[data-mid="${card.dataset.id}"]`)?.classList.add('hl');
+    if (card) {
+      const id = card.dataset.id;
+      (document.querySelector(`#map .pin[data-mid="${id}"]`) ?? document.querySelector(`#map .pin[data-mids~="${id}"]`))?.classList.add('hl');
+    }
   });
 
   $('#detail').addEventListener('click', (e) => {

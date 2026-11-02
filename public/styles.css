@@ -300,3 +300,16 @@ h3 { font-size: 15px; margin: 16px 0 8px; }
 .cond-error { color: var(--warn); font-size: 13px; min-height: 1em; margin: 12px 0 0; }
 .cond-summary { font-size: 13px; color: var(--accent); text-decoration: underline dotted; }
 @media (max-width: 720px) { #openConditions { padding: 6px 8px; font-size: 13px; white-space: nowrap; } }
+
+/* 건물 단위 핀 + 선택 */
+.pin.building { background: #1b1f24; --pin-bg: #1b1f24; gap: 6px; }
+.pin.building .cnt { background: #fff; color: #1b1f24; border-radius: 4px; padding: 0 5px; font-size: 11px; }
+.pin.sel { background: #d93025; --pin-bg: #d93025; outline: 2px solid #fff; z-index: 999; }
+.pin.building.sel .cnt { color: #d93025; }
+.selection {
+  position: sticky; top: 0; z-index: 3;
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 10px 16px; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.selection:not([hidden]) + .results-head { top: 41px; }

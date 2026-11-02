@@ -159,9 +159,19 @@ export function createApp({ store = defaultStore, crawler, sources = getSources,
         const filtered = applyFilters(agg.groups, f);
         const page = sortAndPage(filtered, f);
         // 지도용 마커: 필터 결과 전체(페이지 무관), 최소 필드만
+        // 지도 마커는 목록과 달리 "지도 영역·선택한 건물" 조건을 빼고 전체를 보낸다
+        // (목록은 지도를 따라가고, 지도에는 조건에 맞는 매물이 항상 다 보이도록)
         const markers =
           url.searchParams.get('markers') === 'true'
-            ? filtered.map((g) => ({ id: g.id, lat: g.lat, lng: g.lng, dealType: g.dealType, deposit: g.deposit, monthlyRent: g.monthlyRent, n: g.sources.length }))
+            ? (f.bounds || f.ids.length ? applyFilters(agg.groups, { ...f, bounds: null, ids: [] }) : filtered).map((g) => ({
+                id: g.id,
+                lat: g.lat,
+                lng: g.lng,
+                dealType: g.dealType,
+                deposit: g.deposit,
+                monthlyRent: g.monthlyRent,
+                n: g.sources.length,
+              }))
             : undefined;
         return sendJson(res, 200, { ...page, items: page.items.map(summarize), markers });
       }

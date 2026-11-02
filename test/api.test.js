@@ -79,3 +79,17 @@ test('정적 파일 및 경로 탈출 차단', async () => {
   assert.equal((await get('/maps/index.js')).status, 200);
   assert.notEqual((await get('/..%2fpackage.json')).status, 200);
 });
+
+test('목록은 지도 영역·선택한 건물로 좁히고, 지도 마커는 전체를 유지', async () => {
+  const { body: all } = await get('/api/listings?pageSize=200&markers=true');
+  const [a, b] = all.items;
+  const { body: sel } = await get(`/api/listings?ids=${a.id},${b.id}&markers=true`);
+  assert.equal(sel.total, 2);
+  assert.deepEqual(sel.items.map((g) => g.id).sort(), [a.id, b.id].sort());
+  assert.equal(sel.markers.length, all.markers.length); // 마커는 선택과 무관
+
+  const bounds = [a.lat - 0.001, a.lng - 0.001, a.lat + 0.001, a.lng + 0.001].join(',');
+  const { body: area } = await get(`/api/listings?bounds=${bounds}&markers=true`);
+  assert.ok(area.total >= 1 && area.total < all.total);
+  assert.equal(area.markers.length, all.markers.length);
+});

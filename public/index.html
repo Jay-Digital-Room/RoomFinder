@@ -79,13 +79,17 @@
         <legend>비교</legend>
         <label class="check"><input type="checkbox" id="multiSourceOnly" /> 2곳 이상에 올라온 매물만</label>
         <label class="check"><input type="checkbox" id="priceGapOnly" /> 플랫폼 간 가격 차이 있는 매물만</label>
-        <label class="check"><input type="checkbox" id="boundsOnly" /> 지도 화면 안의 매물만</label>
+        <label class="check"><input type="checkbox" id="boundsOnly" checked /> 목록에 지도 화면 안의 매물만 표시</label>
       </fieldset>
 
       <button type="button" class="primary only-mobile" id="applyFilters">결과 보기</button>
     </aside>
 
     <section class="results" aria-label="검색 결과">
+      <div class="selection" id="selection" hidden>
+        <span id="selectionLabel">선택한 건물</span>
+        <button type="button" class="link" id="clearSelection">✕ 선택 해제</button>
+      </div>
       <div class="results-head">
         <p id="resultCount" aria-live="polite">불러오는 중…</p>
         <select id="sort" aria-label="정렬">

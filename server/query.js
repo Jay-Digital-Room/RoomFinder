@@ -21,6 +21,7 @@ export function parseQuery(params) {
     multiSourceOnly: get('multiSourceOnly') === 'true',
     priceGapOnly: get('priceGapOnly') === 'true',
     bounds: bounds.length === 4 && bounds.every(Number.isFinite) ? bounds : null,
+    ids: list(get('ids')).slice(0, 500), // 지도에서 선택한 건물의 매물만
     sort: get('sort') || 'recent',
     page: Math.max(1, num(get('page')) ?? 1),
     pageSize: Math.min(200, Math.max(1, num(get('pageSize')) ?? 30)),
@@ -31,7 +32,9 @@ const inRange = (v, min, max) => (min == null || v >= min) && (max == null || v 
 
 export function applyFilters(groups, f) {
   const terms = f.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const ids = f.ids?.length ? new Set(f.ids) : null;
   return groups.filter((g) => {
+    if (ids && !ids.has(g.id)) return false;
     if (f.dealTypes.length && !f.dealTypes.includes(g.dealType)) return false;
     if (f.roomTypes.length && !f.roomTypes.includes(g.roomType)) return false;
     if (f.sources.length && !g.sources.some((s) => f.sources.includes(s))) return false;
