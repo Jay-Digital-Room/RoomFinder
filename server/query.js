@@ -64,7 +64,14 @@ const SORTERS = {
 };
 
 export function sortAndPage(groups, f) {
-  const sorted = [...groups].sort(SORTERS[f.sort] ?? SORTERS.recent);
+  let sorted;
+  if (f.sort === 'given' && f.ids?.length) {
+    // 검색 결과처럼 ids 로 넘어온 순서를 그대로 유지
+    const order = new Map(f.ids.map((id, i) => [id, i]));
+    sorted = [...groups].sort((a, b) => (order.get(a.id) ?? 1e9) - (order.get(b.id) ?? 1e9));
+  } else {
+    sorted = [...groups].sort(SORTERS[f.sort] ?? SORTERS.recent);
+  }
   const start = (f.page - 1) * f.pageSize;
   return {
     total: sorted.length,

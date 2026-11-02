@@ -98,11 +98,12 @@ function buildParams(page) {
   for (const id of BOOL_FIELDS) if ($(`#${id}`).checked) p.set(id, 'true');
   if (state.selection) {
     p.set('ids', state.selection.ids.join(','));
+    if (state.selection.ordered) p.set('sort', 'given');
   } else if ($('#boundsOnly').checked && map) {
     const b = map.getBounds();
     p.set('bounds', [b.south, b.west, b.north, b.east].map((n) => n.toFixed(5)).join(','));
   }
-  p.set('sort', state.sort);
+  if (!p.has('sort')) p.set('sort', state.sort);
   p.set('page', page);
   p.set('pageSize', 30);
   return p;
@@ -121,8 +122,7 @@ function syncUrl() {
 
 function restoreFromUrl() {
   const p = new URLSearchParams(location.search);
-  state.filters.q = p.get('q') ?? '';
-  $('#q').value = state.filters.q;
+  state.filters.q = ''; // 검색창은 자연어 검색 전용 (목록 필터와 분리)
   for (const k of ['dealType', 'roomType', 'source']) {
     // 칩 핸들러가 Set 참조를 들고 있으므로 교체하지 않고 내용만 바꾼다
     state.filters[k].clear();
@@ -151,6 +151,7 @@ function cardHtml(g) {
       <div class="spec">${g.areaM2}㎡ (${pyeong(g.areaM2)}평) · ${formatFloor(g.floor, g.totalFloors)} · 관리비 ${g.maintenanceFee}만</div>
       <div class="title">${esc(g.title)}</div>
       <div class="addr">${esc(g.address)}</div>
+      ${state.selection?.reasons?.get(g.id) ? `<div class="reason">💡 ${esc(state.selection.reasons.get(g.id))}</div>` : ''}
       <div class="card-foot">
         <div class="badges">${g.sources.map(sourceBadge).join('')}</div>
         ${gap}
@@ -199,7 +200,7 @@ async function load({ append, markers = false }) {
           : '조건에 맞는 매물이 없어요. 필터를 조정해 보세요.'
       }</li>`;
 
-  const scope = state.selection ? '선택한 건물 매물' : $('#boundsOnly').checked && map ? '지도 영역 매물' : '매물';
+  const scope = state.selection ? (state.selection.kind === 'search' ? '검색 결과' : '선택한 건물 매물') : $('#boundsOnly').checked && map ? '지도 영역 매물' : '매물';
   $('#resultCount').innerHTML = `${scope} <strong>${data.total.toLocaleString()}</strong>개`;
   if (!append) $('.results').scrollTop = 0; // 새 목록은 맨 위부터
   $('#loadMore').hidden = state.items.length >= data.total;
@@ -367,10 +368,16 @@ function showList() {
   if (document.body.dataset.view === 'map') document.querySelector('.mobile-tabs [data-view="list"]')?.click();
 }
 
-function selectBuilding(group) {
-  state.selection = { ids: group.map((m) => m.id), label: `선택한 건물 · 매물 ${group.length}개` };
-  $('#selectionLabel').textContent = state.selection.label;
+function showSelectionBanner(label, detail = '') {
+  $('#selectionLabel').textContent = label;
+  $('#selectionDetail').textContent = detail;
+  $('#selectionDetail').hidden = !detail;
   $('#selection').hidden = false;
+}
+
+function selectBuilding(group) {
+  state.selection = { kind: 'building', ids: group.map((m) => m.id), label: `선택한 건물 · 매물 ${group.length}개` };
+  showSelectionBanner(state.selection.label);
   renderMarkers(lastMarkers); // 선택 표시
   showList();
   refresh({ markers: false });
@@ -380,8 +387,64 @@ function clearSelection({ reload = true } = {}) {
   if (!state.selection) return;
   state.selection = null;
   $('#selection').hidden = true;
+  $('#sort').hidden = false;
   renderMarkers(lastMarkers);
   if (reload) refresh({ markers: false });
+}
+
+/* ---------- 자연어 검색 ---------- */
+
+let searchSeq = 0;
+
+async function naturalSearch(query) {
+  if (!query) {
+    if (state.selection?.kind === 'search') clearSelection();
+    return;
+  }
+  const seq = ++searchSeq;
+  const aiOn = state.meta.ai?.enabled;
+  showSelectionBanner(`🔎 "${query}"`, aiOn ? 'AI가 매물을 읽고 고르는 중이에요… (몇 초 걸려요)' : '검색 중…');
+  $('#q').disabled = true;
+  let r;
+  try {
+    const res = await fetch('/api/search', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query }),
+    });
+    r = await res.json();
+    if (!res.ok) throw new Error(r.error ?? `HTTP ${res.status}`);
+  } catch (err) {
+    if (seq === searchSeq) showSelectionBanner(`🔎 "${query}"`, `검색 실패: ${err.message}`);
+    return;
+  } finally {
+    $('#q').disabled = false;
+  }
+  if (seq !== searchSeq) return;
+
+  const ids = r.results.map((x) => x.id);
+  const detail = [
+    r.mode === 'ai' ? `AI 해석: ${r.summary ?? r.parsedText}` : `해석: ${r.parsedText}`,
+    r.note,
+    !r.aiAvailable ? '(AI 검색을 쓰려면 .env 에 ANTHROPIC_API_KEY 를 넣으세요)' : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  state.selection = {
+    kind: 'search',
+    ids: ids.length ? ids : ['__none__'],
+    ordered: true,
+    reasons: new Map(r.results.map((x) => [x.id, x.reason])),
+    label: `🔎 "${query}" · ${ids.length}개${r.mode === 'ai' ? ' (AI 추천순)' : ''}`,
+  };
+  showSelectionBanner(state.selection.label, detail);
+  $('#sort').hidden = true; // 추천순 그대로 보여주기
+  renderMarkers(lastMarkers);
+  // 결과가 있는 곳으로 지도 이동
+  const pts = lastMarkers.filter((m) => state.selection.reasons.has(m.id));
+  if (map && pts.length) map.fitTo(pts, { padding: 60, maxZoomIn: true });
+  showList();
+  refresh({ markers: false });
 }
 
 /* ---------- 상세 ---------- */
@@ -650,19 +713,15 @@ async function init() {
   );
 
   // 이벤트
+  // 자연어 검색 (Enter)
   $('#searchForm').addEventListener('submit', (e) => {
     e.preventDefault();
-    state.filters.q = $('#q').value.trim();
-    refresh();
+    naturalSearch($('#q').value.trim());
   });
-  let qTimer;
-  $('#q').addEventListener('input', () => {
-    clearTimeout(qTimer);
-    qTimer = setTimeout(() => {
-      state.filters.q = $('#q').value.trim();
-      refresh();
-    }, 350);
+  $('#q').addEventListener('search', () => {
+    if (!$('#q').value && state.selection?.kind === 'search') clearSelection(); // ✕ 로 검색어 지우면 해제
   });
+  $('#aiBadge').hidden = !state.meta.ai?.enabled;
 
   let numTimer;
   for (const id of NUM_FIELDS) {

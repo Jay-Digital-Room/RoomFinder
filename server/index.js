@@ -5,6 +5,8 @@ import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mapConfig } from './config.js';
 import { askConditions } from './prompt.js';
+import { search } from './search/index.js';
+import { createAiRanker } from './search/ai.js';
 import { defaultStore, getAggregated } from './aggregator.js';
 import { createCrawler } from './crawler.js';
 import { inBbox, parseBbox } from './crawl/geo.js';
@@ -64,9 +66,13 @@ async function readBody(req, limit = 10_000) {
 /**
  * 앱 생성. 테스트에서는 store/crawler 를 주입한다.
  */
-export function createApp({ store = defaultStore, crawler, sources = getSources, mode = dataMode(), conditions, logger, persist = true } = {}) {
+export function createApp({ store = defaultStore, crawler, sources = getSources, mode = dataMode(), conditions, logger, persist = true, ai } = {}) {
   crawler ??= createCrawler({ store, getSources: sources, options: crawlOptions(), logger });
   let current = conditions ?? loadConditions().conditions;
+
+  // AI 검색: ai 를 넘기면 그대로(null = 끔), 안 넘기면 .env 의 ANTHROPIC_API_KEY 로 생성
+  let aiRanker = ai ?? null;
+  const aiReady = ai === undefined ? createAiRanker().then((r) => (aiRanker = r)).catch(() => null) : Promise.resolve(aiRanker);
 
   /** 현재 조건으로 수집 (mock 모드는 조건과 무관하게 전체 가상 데이터) */
   function crawlConditions(reason) {
@@ -126,7 +132,21 @@ export function createApp({ store = defaultStore, crawler, sources = getSources,
           conditions: current,
           conditionsText: describe(current),
           regions: REGIONS,
+          ai: { enabled: Boolean(aiRanker), model: aiRanker?.model ?? null },
         });
+      }
+
+      if (pathname === '/api/search') {
+        if (req.method !== 'POST') return sendJson(res, 405, { error: 'method not allowed' });
+        const body = await readBody(req);
+        const query = String(body.query ?? '').trim().slice(0, 300);
+        if (!query) return sendJson(res, 400, { error: '검색어를 입력해 주세요' });
+        await aiReady;
+        const useAi = body.ai !== false && aiRanker;
+        const started = Date.now();
+        const result = await search(getAggregated(store).groups, query, { ai: useAi ? aiRanker : null });
+        console.log(`[검색:${result.mode}] "${query}" → ${result.results.length}개 (${Date.now() - started}ms)`);
+        return sendJson(res, 200, { ...result, aiAvailable: Boolean(aiRanker) });
       }
 
       if (pathname === '/api/conditions') {

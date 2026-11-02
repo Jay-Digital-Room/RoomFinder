@@ -18,7 +18,9 @@
       <span>RoomFinder</span>
     </a>
     <form class="search" id="searchForm" role="search">
-      <input id="q" type="search" placeholder="지역, 역, 매물명 검색 (예: 망원동, 홍대입구역)" autocomplete="off" />
+      <input id="q" type="search" enterkeyhint="search" autocomplete="off"
+             placeholder="원하는 조건을 말해 보세요 — 예: 강남역 근처 월세 60 이하 풀옵션 원룸, 반지하 제외" />
+      <span class="ai-badge" id="aiBadge" hidden title="AI 검색 사용 중">AI</span>
     </form>
     <button class="icon-btn" id="openConditions" title="어디서, 어떤 매물을 수집할지 설정">수집 조건</button>
     <button class="icon-btn filter-toggle" id="filterToggle" aria-label="필터 열기">필터</button>
@@ -87,8 +89,11 @@
 
     <section class="results" aria-label="검색 결과">
       <div class="selection" id="selection" hidden>
-        <span id="selectionLabel">선택한 건물</span>
-        <button type="button" class="link" id="clearSelection">✕ 선택 해제</button>
+        <div class="selection-text">
+          <span id="selectionLabel">선택한 건물</span>
+          <small id="selectionDetail" hidden></small>
+        </div>
+        <button type="button" class="link" id="clearSelection">✕ 해제</button>
       </div>
       <div class="results-head">
         <p id="resultCount" aria-live="polite">불러오는 중…</p>

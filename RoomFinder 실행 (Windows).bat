@@ -10,6 +10,12 @@ if errorlevel 1 goto NO_NODE
 node -e "process.exit(Number(process.versions.node.split('.')[0]) < 20 ? 1 : 0)"
 if errorlevel 1 goto OLD_NODE
 
+rem ---- 처음 한 번: AI 검색용 패키지 설치 ----
+if not exist "node_modules\@anthropic-ai\sdk" (
+  echo 처음 실행이라 필요한 파일을 설치합니다. 잠시만 기다려 주세요...
+  call npm install --no-audit --no-fund
+)
+
 rem ---- 실행: 조건을 묻고, 브라우저를 자동으로 엽니다 ----
 node server\index.js %*
 echo.

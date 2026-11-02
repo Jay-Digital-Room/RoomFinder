@@ -110,7 +110,7 @@ test('선택하지 않은 플랫폼은 요청하지 않는다', async () => {
 test('PUT /api/conditions: 저장 → 다른 지역 매물 정리 → 새 조건으로 수집', async () => {
   const store = createStore();
   const src = fakeSource('zigbang', { delay: 100, items: (ctx) => [listing(`${ctx.bbox.name}`, 'zigbang', { lat: (ctx.bbox.south + ctx.bbox.north) / 2, lng: (ctx.bbox.west + ctx.bbox.east) / 2 })] });
-  const app = createApp({ store, sources: () => [src], mode: 'live', conditions: C({ regions: ['hongdae'] }), logger: silent, persist: false });
+  const app = createApp({ store, sources: () => [src], mode: 'live', conditions: C({ regions: ['hongdae'] }), logger: silent, persist: false, ai: null });
   await app.crawlConditions('test');
   assert.equal(store.size, 1);
 
