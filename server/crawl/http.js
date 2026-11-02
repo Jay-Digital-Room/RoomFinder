@@ -9,7 +9,14 @@ const DEFAULT_UA =
 
 export class HttpError extends Error {
   constructor(status, url, body) {
-    super(`HTTP ${status} ${url.split('?')[0]}`);
+    // 응답 본문 일부를 메시지에 포함 (HTML 이면 태그 제거) → 원인 파악용
+    const snippet = String(body ?? '')
+      .replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 200);
+    super(`HTTP ${status} ${url.split('?')[0]}${snippet ? ` — 응답: ${snippet}` : ''}`);
     this.status = status;
     this.body = body;
   }

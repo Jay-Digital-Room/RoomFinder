@@ -165,6 +165,21 @@
     </form>
   </dialog>
 
+  <dialog id="sourceInfo" aria-labelledby="sourceInfoTitle">
+    <div class="detail-body">
+      <header class="detail-head">
+        <div>
+          <h2 id="sourceInfoTitle">수집 상태</h2>
+          <p class="addr" id="sourceInfoSub"></p>
+        </div>
+        <button type="button" class="icon-btn" id="closeSourceInfo" aria-label="닫기">✕</button>
+      </header>
+      <pre class="source-log" id="sourceInfoLog"></pre>
+      <p class="note">이 내용을 복사해서 보내주시면 원인을 찾을 수 있어요.</p>
+      <button type="button" class="primary" id="copySourceInfo">복사하기</button>
+    </div>
+  </dialog>
+
   <dialog id="detail" aria-labelledby="detailTitle">
     <div class="detail-body" id="detailBody"></div>
   </dialog>

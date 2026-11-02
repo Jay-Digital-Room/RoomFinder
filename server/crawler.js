@@ -47,6 +47,7 @@ export function createCrawler({ store, getSources, options = {}, logger = consol
       lastRunAt: started,
       lastOkAt: ok ? Date.now() : prev.lastOkAt,
       lastError: ok ? null : errors[0],
+      errors: errors.slice(0, 10),
       lastCount: count,
       normalizeFailed,
       warnings: [...(ok ? errors : []), ...warnings].slice(0, 10),

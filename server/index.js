@@ -107,6 +107,7 @@ export function createApp({ store = defaultStore, crawler, sources = getSources,
         lastRunAt: st.lastRunAt ? new Date(st.lastRunAt).toISOString() : null,
         lastOkAt: st.lastOkAt ? new Date(st.lastOkAt).toISOString() : null,
         error: st.lastError ?? null,
+        errors: st.errors ?? [],
         warnings: st.warnings ?? [],
       };
     });

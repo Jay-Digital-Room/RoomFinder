@@ -532,7 +532,7 @@ function renderSourceBar() {
         const tip = s.error
           ? `마지막 시도 ${ago(s.lastRunAt)} 실패: ${s.error}`
           : `마지막 수집 ${ago(s.lastOkAt)}${s.warnings?.length ? ` · 경고 ${s.warnings.length}건` : ''}`;
-        return `<span class="src ${cls}" style="--c:${s.color}" title="${esc(tip)}">${esc(s.name)} ${label}${s.verified ? '' : '<sup title="응답 형식이 검증되지 않은 수집기">β</sup>'}</span>`;
+        return `<button type="button" class="src ${cls}" data-src="${esc(s.key)}" style="--c:${s.color}" title="${esc(tip)} (눌러서 자세히 보기)">${esc(s.name)} ${label}${s.verified ? '' : '<sup title="응답 형식이 검증되지 않은 수집기">β</sup>'}</button>`;
       })
       .join('') +
     `<span class="src-summary">${
@@ -541,6 +541,29 @@ function renderSourceBar() {
         : `<button type="button" class="link cond-summary" title="수집 조건 바꾸기">${esc(state.meta.conditionsText ?? '')}</button> · `
     }원본 ${stats.rawCount}건 → 중복 ${stats.duplicatesMerged}건 통합</span>`;
   $('#sourceBar .cond-summary')?.addEventListener('click', openConditions);
+  $('#sourceBar').querySelectorAll('.src[data-src]').forEach((b) => b.addEventListener('click', () => openSourceInfo(b.dataset.src)));
+}
+
+/** 소스 이름을 누르면: 마지막 수집 결과·오류 전문 (복사해서 보낼 수 있게) */
+function openSourceInfo(key) {
+  const s = state.meta.sources.find((x) => x.key === key);
+  if (!s) return;
+  const when = (iso) => (iso ? new Date(iso).toLocaleString('ko-KR') : '-');
+  const lines = [
+    `[${s.name}] ${s.running ? '수집 중' : s.error ? '오류' : '정상'}`,
+    `저장된 매물: ${s.count}건`,
+    `마지막 시도: ${when(s.lastRunAt)}`,
+    `마지막 성공: ${when(s.lastOkAt)}`,
+    `수집 조건: ${state.meta.conditionsText ?? '-'}`,
+  ];
+  if (s.errors?.length) lines.push('', '오류:', ...s.errors.map((e) => `- ${e}`));
+  else if (s.error) lines.push('', '오류:', `- ${s.error}`);
+  if (s.warnings?.length) lines.push('', '경고:', ...s.warnings.map((w) => `- ${w}`));
+  $('#sourceInfoTitle').textContent = `${s.name} 수집 상태`;
+  $('#sourceInfoSub').textContent = s.error ? '이 사이트에서 매물을 가져오지 못했어요.' : '정상적으로 수집되고 있어요.';
+  $('#sourceInfoLog').textContent = lines.join('\n');
+  $('#copySourceInfo').textContent = '복사하기';
+  $('#sourceInfo').showModal();
 }
 
 let crawlTimer = null;
@@ -696,6 +719,19 @@ async function init() {
   if (state.meta.dataMode === 'live') $('#crawlHere').hidden = false;
   $('#openConditions').hidden = state.meta.dataMode !== 'live';
   $('#openConditions').addEventListener('click', openConditions);
+  $('#closeSourceInfo').addEventListener('click', () => $('#sourceInfo').close());
+  $('#copySourceInfo').addEventListener('click', async () => {
+    const text = $('#sourceInfoLog').textContent;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const r = document.createRange(); // 클립보드 권한이 없으면 선택만 해 둠 (Ctrl+C)
+      r.selectNodeContents($('#sourceInfoLog'));
+      getSelection().removeAllRanges();
+      getSelection().addRange(r);
+    }
+    $('#copySourceInfo').textContent = '복사했어요 ✔';
+  });
   $('#closeConditions').addEventListener('click', () => $('#conditions').close());
   $('#condAddMapArea').addEventListener('click', addMapArea);
   $('#condForm').addEventListener('submit', saveConditionsForm);
