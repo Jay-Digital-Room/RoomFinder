@@ -60,3 +60,18 @@ test('splitBbox 는 영역을 빠짐없이 나눈다', () => {
   assert.equal(tiles.length, 9);
   assert.equal(Math.max(...tiles.map((t) => t.north)), 37.53);
 });
+
+test('접속 불가(ENOTFOUND)면 이후 요청은 기다리지 않고 바로 실패', async () => {
+  let n = 0;
+  const f = async () => {
+    n++;
+    throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } });
+  };
+  const c = createClient({ name: 't', minDelayMs: 500, fetchImpl: f });
+  const t0 = Date.now();
+  await assert.rejects(c.request('http://x/1'), /ENOTFOUND/);
+  await assert.rejects(c.request('http://x/2'), /ENOTFOUND/);
+  await assert.rejects(c.request('http://x/3'), /ENOTFOUND/);
+  assert.equal(n, 1);
+  assert.ok(Date.now() - t0 < 300);
+});

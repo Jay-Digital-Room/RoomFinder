@@ -15,10 +15,18 @@ import { composeAddress, roomTypeFromText, shortSido, toIso } from './common.js'
  */
 const BASE = 'https://apis.zigbang.com';
 const CATEGORIES = [
-  { path: 'onerooms', salesTypes: ['전세', '월세'], web: 'oneroom' },
-  { path: 'villas', salesTypes: ['전세', '월세', '매매'], web: 'villa' },
-  { path: 'officetels', salesTypes: ['전세', '월세', '매매'], web: 'officetel' },
+  { path: 'onerooms', salesTypes: ['전세', '월세'], web: 'oneroom', roomTypes: ['원룸', '투룸', '쓰리룸+'] },
+  { path: 'villas', salesTypes: ['전세', '월세', '매매'], web: 'villa', roomTypes: ['빌라', '투룸', '쓰리룸+'] },
+  { path: 'officetels', salesTypes: ['전세', '월세', '매매'], web: 'officetel', roomTypes: ['오피스텔'] },
 ];
+
+/** 수집 조건에 맞는 카테고리·거래유형만 남긴다 (불필요한 요청 줄이기) */
+export function plan(conditions) {
+  if (!conditions) return CATEGORIES;
+  return CATEGORIES.filter((c) => c.roomTypes.some((r) => conditions.roomTypes.includes(r)))
+    .map((c) => ({ ...c, salesTypes: c.salesTypes.filter((t) => conditions.dealTypes.includes(t)) }))
+    .filter((c) => c.salesTypes.length);
+}
 const BATCH = 15;
 
 let client;
@@ -36,9 +44,14 @@ function http(ctx) {
   return client;
 }
 
-function listUrl(cat, geohash) {
+function listUrl(cat, geohash, conditions) {
   const p = new URLSearchParams({ geohash });
   cat.salesTypes.forEach((t, i) => p.append(`salesTypes[${i}]`, t));
+  // 가격 필터(만원). 매매가 섞이면 보증금 필터가 매매가에 적용될 수 있어 생략
+  if (!cat.salesTypes.includes('매매')) {
+    if (conditions?.depositMax) p.set('depositMax', String(conditions.depositMax));
+    if (conditions?.rentMax && cat.salesTypes.includes('월세')) p.set('rentMax', String(conditions.rentMax));
+  }
   return `${BASE}/house/property/v1/items/${cat.path}?${p}`;
 }
 
@@ -57,11 +70,11 @@ export default {
     const errors = [];
     const maxItems = ctx.maxItems ?? 300;
 
-    for (const cat of CATEGORIES) {
+    for (const cat of plan(ctx.conditions)) {
       const ids = [];
       for (const gh of geohashesForBbox(ctx.bbox, 5)) {
         try {
-          const res = await api.request(listUrl(cat, gh));
+          const res = await api.request(listUrl(cat, gh, ctx.conditions));
           for (const it of res.items ?? []) {
             if (inBbox({ lat: it.lat, lng: it.lng }, ctx.bbox)) ids.push(it.id ?? it.itemId ?? it.item_id);
           }

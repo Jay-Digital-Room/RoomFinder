@@ -30,6 +30,7 @@ export function createClient({
   let lastAt = 0;
   const cookies = new Map();
   let requestCount = 0;
+  let offline = null; // { until, message } — 접속 불가 판정 후 잠시 요청을 보내지 않음
 
   function storeCookies(res) {
     const list = typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [];
@@ -41,6 +42,7 @@ export function createClient({
   }
 
   async function doRequest(url, { method = 'GET', headers: h = {}, body, json = true } = {}) {
+    if (offline && Date.now() < offline.until) throw new Error(offline.message);
     for (let attempt = 0; ; attempt++) {
       const wait = lastAt + minDelayMs - Date.now();
       if (wait > 0) await sleep(wait);
@@ -64,8 +66,13 @@ export function createClient({
       try {
         res = await fetchImpl(url, { method, headers: reqHeaders, body, signal: AbortSignal.timeout(timeoutMs) });
       } catch (err) {
-        if (attempt >= retries) throw new Error(`[${name}] 네트워크 오류: ${err.cause?.code ?? err.message}`);
-        await sleep(1000 * 2 ** attempt);
+        const code = err.cause?.code ?? err.name ?? err.message;
+        // 주소를 못 찾거나 접속이 거부되면 재시도해도 소용없음 → 바로 실패 (기다리는 시간 줄이기)
+        const fatal = ['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'CERT_HAS_EXPIRED'].includes(code);
+        const message = `[${name}] 네트워크 오류: ${code}`;
+        if (fatal) offline = { until: Date.now() + 60_000, message };
+        if (fatal || attempt >= Math.min(retries, 1)) throw new Error(message);
+        await sleep(1000);
         continue;
       }
       storeCookies(res);

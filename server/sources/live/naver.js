@@ -35,11 +35,23 @@ function http(ctx) {
   return client;
 }
 
-function payload(bbox, lastInfo) {
+const TRADE_CODE = { 매매: 'A1', 전세: 'B1', 월세: 'B2' };
+const ROOM_CODES = { 원룸: ['C01'], 투룸: ['C01', 'C02'], '쓰리룸+': ['C02'], 빌라: ['C02'], 오피스텔: ['A02'], 아파트: ['A01'] };
+
+function payload(bbox, lastInfo, conditions) {
+  const tradeTypes = conditions ? conditions.dealTypes.map((d) => TRADE_CODE[d]) : ['A1', 'B1', 'B2'];
+  const realEstateTypes = conditions
+    ? [...new Set(conditions.roomTypes.flatMap((r) => ROOM_CODES[r] ?? []))]
+    : ['C01', 'C02', 'A02', 'A01'];
+  const range = {};
+  // 가격 필터는 "원" 단위. 다른 거래유형은 걸러내지 않는다(네이버 동작)
+  if (conditions?.depositMax) range.warrantyPrice = { max: conditions.depositMax * 10000 };
+  if (conditions?.rentMax) range.rentPrice = { max: conditions.rentMax * 10000 };
   return {
     filter: {
-      tradeTypes: ['A1', 'B1', 'B2'],
-      realEstateTypes: ['C01', 'C02', 'A02', 'A01'],
+      tradeTypes,
+      realEstateTypes,
+      ...range,
       roomCount: [],
       bathRoomCount: [],
       optionTypes: [],
@@ -80,7 +92,7 @@ export default {
     for (let page = 1; page <= maxPages; page++) {
       let res;
       try {
-        res = await api.request(URL_, { method: 'POST', body: payload(ctx.bbox, lastInfo) });
+        res = await api.request(URL_, { method: 'POST', body: payload(ctx.bbox, lastInfo, ctx.conditions) });
       } catch (err) {
         if (err.status === 429) blockedUntil = Date.now() + COOLDOWN_MS;
         if (out.length) {

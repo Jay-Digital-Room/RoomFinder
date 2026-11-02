@@ -39,7 +39,21 @@ const FILTERS = {
   },
 };
 // 빌라/오피스텔 필터 키는 확인되지 않아 원룸·투룸 필터를 기반으로 시도한다 (실패해도 다른 카테고리는 계속)
-const CATEGORIES = ['one-two', 'house-villa', 'officetel'];
+const CATEGORIES = [
+  { key: 'one-two', roomTypes: ['원룸', '투룸'], selling: ['MONTHLY_RENT', 'LEASE'] },
+  { key: 'house-villa', roomTypes: ['빌라', '투룸', '쓰리룸+'], selling: ['MONTHLY_RENT', 'LEASE', 'SELL'] },
+  { key: 'officetel', roomTypes: ['오피스텔'], selling: ['MONTHLY_RENT', 'LEASE', 'SELL'] },
+];
+const SELLING = { 월세: 'MONTHLY_RENT', 전세: 'LEASE', 매매: 'SELL' };
+
+/** 수집 조건에 맞는 카테고리·거래유형만 남긴다 */
+export function plan(conditions) {
+  if (!conditions) return CATEGORIES;
+  const wanted = conditions.dealTypes.map((d) => SELLING[d]);
+  return CATEGORIES.filter((c) => c.roomTypes.some((r) => conditions.roomTypes.includes(r)))
+    .map((c) => ({ ...c, selling: c.selling.filter((s) => wanted.includes(s)) }))
+    .filter((c) => c.selling.length);
+}
 
 let client;
 function http(ctx) {
@@ -57,10 +71,13 @@ function http(ctx) {
   return client;
 }
 
-function url(category, tile, page) {
-  const filters = FILTERS[category] ?? {
+function url(cat, tile, page, conditions) {
+  const category = cat.key;
+  const filters = {
     ...FILTERS['one-two'],
-    sellingTypeList: ['MONTHLY_RENT', 'LEASE', 'SELL'],
+    sellingTypeList: cat.selling,
+    depositRange: { min: 0, max: conditions?.depositMax ?? RANGE.max },
+    priceRange: { min: 0, max: conditions?.rentMax ?? RANGE.max },
   };
   const p = new URLSearchParams({
     filters: JSON.stringify(filters),
@@ -86,18 +103,18 @@ export default {
     // 줌 16 화면 크기 정도로 나눠 요청
     const tiles = splitBbox(ctx.bbox, 0.02);
 
-    for (const category of CATEGORIES) {
+    for (const cat of plan(ctx.conditions)) {
       for (const tile of tiles) {
         for (let page = 1; page <= maxPages; page++) {
           let res;
           try {
-            res = await api.request(url(category, tile, page));
+            res = await api.request(url(cat, tile, page, ctx.conditions));
           } catch (err) {
-            errors.push(`${category} p${page}: ${err.message}`);
+            errors.push(`${cat.key} p${page}: ${err.message}`);
             break;
           }
           const r = res.result ?? res;
-          for (const room of r.roomList ?? []) out.push({ ...room, _category: category });
+          for (const room of r.roomList ?? []) out.push({ ...room, _category: cat.key });
           if (!r.hasMore) break;
         }
       }

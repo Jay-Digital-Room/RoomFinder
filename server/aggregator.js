@@ -169,34 +169,36 @@ function withTimeout(promise, ms, label) {
 }
 
 /**
+ * 소스 하나에서 수집 → 정규화 → 검증. 실패하면 예외.
+ */
+export async function collectOne(src, ctx = {}, timeoutMs = 8000) {
+  const started = Date.now();
+  const warnings = [];
+  const raws = await withTimeout(
+    Promise.resolve(src.fetchRaw({ ...ctx, warn: (msgs) => warnings.push(...(msgs ?? [])) })),
+    timeoutMs,
+    src.key,
+  );
+  const listings = [];
+  let failed = 0;
+  for (const raw of raws ?? []) {
+    try {
+      const l = src.normalize(raw);
+      if (isValidListing(l)) listings.push(l);
+      else failed++;
+    } catch {
+      failed++;
+    }
+  }
+  return { listings, failed, warnings: warnings.slice(0, 10), ms: Date.now() - started };
+}
+
+/**
  * 모든 소스에서 매물을 수집한다. 일부 소스가 실패해도 나머지 결과로 응답한다.
- * ctx 는 각 어댑터의 fetchRaw(ctx) 로 전달된다 (bbox, maxPages 등).
+ * ctx 는 각 어댑터의 fetchRaw(ctx) 로 전달된다 (bbox, conditions, maxPages 등).
  */
 export async function collect({ timeoutMs = 8000, sources = getSources(), ctx = {} } = {}) {
-  const results = await Promise.allSettled(
-    sources.map(async (src) => {
-      const started = Date.now();
-      const warnings = [];
-      const raws = await withTimeout(
-        Promise.resolve(src.fetchRaw({ ...ctx, warn: (msgs) => warnings.push(...(msgs ?? [])) })),
-        timeoutMs,
-        src.key,
-      );
-      const listings = [];
-      let failed = 0;
-      for (const raw of raws ?? []) {
-        try {
-          const l = src.normalize(raw);
-          if (isValidListing(l)) listings.push(l);
-          else failed++;
-        } catch {
-          failed++;
-        }
-      }
-      return { listings, failed, warnings, ms: Date.now() - started };
-    }),
-  );
-
+  const results = await Promise.allSettled(sources.map((src) => collectOne(src, ctx, timeoutMs)));
   const listings = [];
   const status = [];
   results.forEach((r, i) => {
@@ -204,7 +206,7 @@ export async function collect({ timeoutMs = 8000, sources = getSources(), ctx = 
     const meta = { key: src.key, name: src.name, color: src.color, homepage: src.homepage };
     if (r.status === 'fulfilled') {
       listings.push(...r.value.listings);
-      status.push({ ...meta, ok: true, count: r.value.listings.length, normalizeFailed: r.value.failed, warnings: r.value.warnings.slice(0, 10), ms: r.value.ms });
+      status.push({ ...meta, ok: true, count: r.value.listings.length, normalizeFailed: r.value.failed, warnings: r.value.warnings, ms: r.value.ms });
     } else {
       status.push({ ...meta, ok: false, count: 0, error: r.reason?.message ?? String(r.reason) });
     }

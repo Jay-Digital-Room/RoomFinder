@@ -19,7 +19,11 @@ import peterpanMock from './mock/peterpan.js';
  * SOURCES=zigbang,naver 처럼 지정하면 해당 소스만 활성화.
  */
 const LIVE = [zigbangLive, dabangLive, naverLive, peterpanLive];
-const MOCK = [zigbangMock, dabangMock, naverMock, peterpanMock];
+// 가상 매물은 실제 사이트에 없으므로 원문 링크를 만들지 않는다 (가짜 번호로 404 방지)
+const MOCK = [zigbangMock, dabangMock, naverMock, peterpanMock].map((s) => ({
+  ...s,
+  normalize: (raw) => ({ ...s.normalize(raw), url: null }),
+}));
 
 export function dataMode() {
   return process.env.DATA_MODE === 'mock' || process.argv.includes('--mock') ? 'mock' : 'live';

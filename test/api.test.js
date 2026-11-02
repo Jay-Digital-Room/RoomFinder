@@ -3,13 +3,15 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { createApp } from '../server/index.js';
 import { createStore } from '../server/store.js';
+
+const silent = { log() {}, warn() {} };
 import { getSources } from '../server/sources/index.js';
 
 let server;
 let base;
 let app;
 before(async () => {
-  app = createApp({ store: createStore(), sources: () => getSources('mock'), mode: 'mock' });
+  app = createApp({ store: createStore(), sources: () => getSources('mock'), mode: 'mock', logger: silent, persist: false });
   await app.crawler.run({ south: -90, west: -180, north: 90, east: 180 });
   server = createServer(app.handle);
   await new Promise((r) => server.listen(0, r));

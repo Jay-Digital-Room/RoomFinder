@@ -29,14 +29,18 @@ function http(ctx) {
   return client;
 }
 
-function url(bbox, pageIndex) {
+const PP_ROOM = { 원룸: '원룸', 투룸: '투룸', '쓰리룸+': '쓰리룸', 오피스텔: '오피스텔', 빌라: '빌라' };
+
+function url(bbox, pageIndex, conditions) {
   const c = bboxCenter(bbox);
+  const deals = conditions?.dealTypes ?? ['월세', '전세', '매매'];
+  const rooms = (conditions?.roomTypes ?? Object.keys(PP_ROOM)).map((r) => PP_ROOM[r]).filter(Boolean);
   const filter = [
     `latitude:${bbox.south}~${bbox.north}`,
     `longitude:${bbox.west}~${bbox.east}`,
     'checkMonth:999~999',
-    'contractType;["월세","전세","매매"]',
-    'roomType;["원룸","투룸","쓰리룸","오피스텔","빌라"]',
+    `contractType;${JSON.stringify(deals)}`,
+    `roomType;${JSON.stringify(rooms.length ? rooms : Object.values(PP_ROOM))}`,
   ].join('||');
   const p = new URLSearchParams({
     zoomLevel: '15',
@@ -84,7 +88,7 @@ export default {
     for (let page = 1; page <= maxPages; page++) {
       let res;
       try {
-        res = await api.request(url(ctx.bbox, page));
+        res = await api.request(url(ctx.bbox, page, ctx.conditions));
       } catch (err) {
         if (out.length) {
           ctx.warn?.([`page ${page}: ${err.message}`]);

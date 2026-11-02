@@ -207,6 +207,7 @@ async function initMap(config) {
   map = await createMap($('#map'), config);
   document.body.dataset.mapProvider = map.name;
   if (lastMarkers.length) renderMarkers(lastMarkers);
+  else focusConditionAreas();
   let t;
   map.onIdle(() => {
     renderMarkers(lastMarkers); // 확대/축소에 따라 클러스터 다시 계산
@@ -219,6 +220,15 @@ async function initMap(config) {
 function shortPrice(m) {
   if (m.dealType === '월세') return `${formatMoney(m.deposit)}/${m.monthlyRent}`;
   return m.deposit >= 10000 ? `${(m.deposit / 10000).toFixed(m.deposit % 10000 ? 1 : 0)}억` : formatMoney(m.deposit);
+}
+
+/** 수집 조건의 지역으로 지도 이동 (아직 매물이 없을 때) */
+function focusConditionAreas() {
+  const c = state.meta?.conditions;
+  if (!map || !c || state.meta.dataMode !== 'live') return;
+  const areas = [...c.regions.map((id) => state.meta.regions.find((r) => r.id === id)).filter(Boolean), ...c.customAreas];
+  const pts = areas.flatMap((a) => [{ lat: a.south, lng: a.west }, { lat: a.north, lng: a.east }]);
+  if (pts.length) map.fitTo(pts, { padding: 20 });
 }
 
 let lastMarkers = [];
@@ -333,7 +343,7 @@ async function openDetail(id) {
           <td class="num">${formatPrice(o)}</td>
           <td>${diff}</td>
           <td class="muted">${timeAgo(o.updatedAt)}</td>
-          <td><a href="${esc(o.url)}" target="_blank" rel="noopener noreferrer">원문 보기 ↗</a></td>
+          <td>${o.url ? `<a href="${esc(o.url)}" target="_blank" rel="noopener noreferrer">원문 보기 ↗</a>` : '<span class="muted" title="가상 데이터 모드의 매물은 실제 사이트에 없습니다">가상 매물</span>'}</td>
         </tr>`;
     })
     .join('');
@@ -380,14 +390,19 @@ function renderSourceBar() {
     sources
       .map((s) => {
         const cls = s.running ? 'running' : s.error ? 'fail' : 'ok';
-        const label = s.running ? '수집 중…' : s.error ? '오류' : `${s.count}`;
+        const label = s.running ? `수집 중${s.total > 1 ? ` ${s.done ?? 0}/${s.total}` : '…'}` : s.error ? '오류' : `${s.count}`;
         const tip = s.error
           ? `마지막 시도 ${ago(s.lastRunAt)} 실패: ${s.error}`
           : `마지막 수집 ${ago(s.lastOkAt)}${s.warnings?.length ? ` · 경고 ${s.warnings.length}건` : ''}`;
         return `<span class="src ${cls}" style="--c:${s.color}" title="${esc(tip)}">${esc(s.name)} ${label}${s.verified ? '' : '<sup title="응답 형식이 검증되지 않은 수집기">β</sup>'}</span>`;
       })
       .join('') +
-    `<span class="src-summary">${dataMode === 'mock' ? '<b>가상 데이터</b> · ' : ''}${crawling ? '수집 중 · ' : ''}원본 ${stats.rawCount}건 → 중복 ${stats.duplicatesMerged}건 통합</span>`;
+    `<span class="src-summary">${
+      dataMode === 'mock'
+        ? '<b>가상 데이터</b> · '
+        : `<button type="button" class="link cond-summary" title="수집 조건 바꾸기">${esc(state.meta.conditionsText ?? '')}</button> · `
+    }원본 ${stats.rawCount}건 → 중복 ${stats.duplicatesMerged}건 통합</span>`;
+  $('#sourceBar .cond-summary')?.addEventListener('click', openConditions);
 }
 
 let crawlTimer = null;
@@ -398,8 +413,10 @@ function watchCrawl() {
   const tick = async () => {
     try {
       const r = await fetch('/api/crawl').then((x) => x.json());
+      const grew = r.stats.rawCount !== state.meta.stats.rawCount;
       Object.assign(state.meta, { sources: r.sources, stats: r.stats, crawling: r.crawling });
       renderSourceBar();
+      if (grew) refresh(); // 먼저 끝난 사이트의 매물부터 바로 보여주기
       if (r.crawling) {
         crawlTimer = setTimeout(tick, 2500);
         return;
@@ -433,6 +450,98 @@ async function crawlHere() {
   }
 }
 
+/* ---------- 수집 조건 ---------- */
+
+const SOURCE_LABEL = { zigbang: '직방', dabang: '다방', naver: '네이버부동산', peterpan: '피터팬' };
+let draft = null;
+
+function chipGroup(container, values, selected, labelOf = (v) => v) {
+  container.innerHTML = values
+    .map((v) => `<button type="button" class="chip${selected.includes(v) ? ' on' : ''}" data-v="${esc(v)}" aria-pressed="${selected.includes(v)}">${esc(labelOf(v))}</button>`)
+    .join('');
+  container.onclick = (e) => {
+    const btn = e.target.closest('.chip');
+    if (!btn) return;
+    const v = btn.dataset.v;
+    const i = selected.indexOf(v);
+    i >= 0 ? selected.splice(i, 1) : selected.push(v);
+    btn.classList.toggle('on', i < 0);
+    btn.setAttribute('aria-pressed', String(i < 0));
+    $('#condError').textContent = '';
+  };
+}
+
+function renderCustomAreas() {
+  $('#condCustom').innerHTML = draft.customAreas
+    .map((a, i) => `<span class="chip on">${esc(a.name)} <button type="button" class="x" data-i="${i}" aria-label="삭제">✕</button></span>`)
+    .join('');
+  $('#condCustom').onclick = (e) => {
+    const x = e.target.closest('.x');
+    if (!x) return;
+    draft.customAreas.splice(Number(x.dataset.i), 1);
+    renderCustomAreas();
+  };
+}
+
+function openConditions() {
+  const c = state.meta.conditions;
+  draft = structuredClone(c);
+  chipGroup($('#condRegions'), state.meta.regions.map((r) => r.id), draft.regions, (id) => state.meta.regions.find((r) => r.id === id)?.name ?? id);
+  chipGroup($('#condDeals'), state.meta.dealTypes, draft.dealTypes);
+  chipGroup($('#condRooms'), state.meta.roomTypes, draft.roomTypes);
+  chipGroup($('#condSources'), Object.keys(SOURCE_LABEL), draft.sources, (k) => SOURCE_LABEL[k]);
+  $('#condDepositMax').value = c.depositMax ?? '';
+  $('#condRentMax').value = c.rentMax ?? '';
+  renderCustomAreas();
+  $('#condError').textContent = '';
+  $('#condAddMapArea').hidden = !map;
+  $('#conditions').showModal();
+}
+
+function addMapArea() {
+  if (!map) return;
+  const b = map.getBounds();
+  const km = (b.east - b.west) * 88.3;
+  const kmH = (b.north - b.south) * 110.6;
+  if (km > 6 || kmH > 6) {
+    $('#condError').textContent = '지도 영역이 너무 넓어요 (한 변 6km 이하). 지도를 더 확대한 뒤 추가해 주세요.';
+    return;
+  }
+  const r = (n) => Number(n.toFixed(5));
+  draft.customAreas.push({ name: `지도 영역 ${draft.customAreas.length + 1}`, south: r(b.south), west: r(b.west), north: r(b.north), east: r(b.east) });
+  renderCustomAreas();
+}
+
+async function saveConditionsForm(e) {
+  e.preventDefault();
+  const err = (m) => ($('#condError').textContent = m);
+  if (!draft.regions.length && !draft.customAreas.length) return err('지역을 하나 이상 골라 주세요.');
+  if (draft.regions.length + draft.customAreas.length > 6) return err('지역은 최대 6곳까지 고를 수 있어요.');
+  if (!draft.dealTypes.length) return err('거래 유형을 하나 이상 골라 주세요.');
+  if (!draft.roomTypes.length) return err('방 종류를 하나 이상 골라 주세요.');
+  if (!draft.sources.length) return err('플랫폼을 하나 이상 골라 주세요.');
+  draft.depositMax = $('#condDepositMax').value || null;
+  draft.rentMax = $('#condRentMax').value || null;
+
+  $('#condSave').disabled = true;
+  try {
+    const res = await fetch('/api/conditions', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(draft) });
+    const body = await res.json();
+    if (!res.ok) return err(body.error ?? '저장 실패');
+    state.meta.conditions = body.conditions;
+    state.meta.conditionsText = body.text;
+    state.meta.crawling = true;
+    $('#conditions').close();
+    fittedOnce = false; // 새 매물이 들어오면 그 위치로 지도 맞춤
+    focusConditionAreas();
+    renderSourceBar();
+    refresh();
+    watchCrawl();
+  } finally {
+    $('#condSave').disabled = false;
+  }
+}
+
 /* ---------- 초기화 ---------- */
 
 async function init() {
@@ -447,6 +556,11 @@ async function init() {
 
   renderSourceBar();
   if (state.meta.dataMode === 'live') $('#crawlHere').hidden = false;
+  $('#openConditions').hidden = state.meta.dataMode !== 'live';
+  $('#openConditions').addEventListener('click', openConditions);
+  $('#closeConditions').addEventListener('click', () => $('#conditions').close());
+  $('#condAddMapArea').addEventListener('click', addMapArea);
+  $('#condForm').addEventListener('submit', saveConditionsForm);
   $('#crawlHere').addEventListener('click', crawlHere);
   if (state.meta.crawling) watchCrawl();
 

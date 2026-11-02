@@ -5,6 +5,7 @@
  *   npm run crawl                                  # 모든 소스, 기본 영역
  *   npm run crawl -- --source peterpan --dump      # 원본 응답을 data/debug/peterpan.json 에 저장
  *   npm run crawl -- --bbox 37.49,127.02,37.51,127.05 --pages 1
+ *   npm run crawl -- --all                         # 저장된 수집 조건 무시하고 전체 유형 수집
  */
 import '../server/config.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -12,11 +13,17 @@ import { parseArgs } from 'node:util';
 import { isValidListing } from '../server/aggregator.js';
 import { parseBbox } from '../server/crawl/geo.js';
 import { getSources } from '../server/sources/index.js';
+import { areasOf, loadConditions } from '../server/conditions.js';
+
+// 기본값: 저장된 수집 조건(npm start 에서 고른 것)의 첫 번째 지역
+const { conditions } = loadConditions();
+const first = areasOf(conditions)[0];
 
 const { values } = parseArgs({
   options: {
     source: { type: 'string' },
-    bbox: { type: 'string', default: process.env.CRAWL_BBOXES?.split(';')[0] ?? '37.545,126.900,37.565,126.935' },
+    bbox: { type: 'string', default: [first.south, first.west, first.north, first.east].join(',') },
+    all: { type: 'boolean', default: false }, // 수집 조건(거래유형·방 종류·가격) 무시
     pages: { type: 'string', default: '1' },
     dump: { type: 'boolean', default: false },
   },
@@ -39,7 +46,13 @@ for (const src of sources) {
   const warnings = [];
   let raws;
   try {
-    raws = await src.fetchRaw({ bbox, maxPages: Number(values.pages), maxItems: 60, warn: (w) => warnings.push(...w) });
+    raws = await src.fetchRaw({
+      bbox,
+      conditions: values.all ? null : conditions,
+      maxPages: Number(values.pages),
+      maxItems: 60,
+      warn: (w) => warnings.push(...w),
+    });
   } catch (err) {
     console.log(`❌ 수집 실패: ${err.message}`);
     if (err.body) console.log(`   응답 본문: ${String(err.body).slice(0, 300)}`);

@@ -72,6 +72,21 @@ export function createStore({ file = null, maxAgeMs = 3 * 24 * 3600 * 1000 } = {
       for (const { listing } of items.values()) counts[listing.source] = (counts[listing.source] ?? 0) + 1;
       return counts;
     },
+    /** 조건에 맞는 매물만 남긴다 (수집 조건을 바꿨을 때) */
+    retain(predicate) {
+      let removed = 0;
+      for (const [id, e] of items) {
+        if (!predicate(e.listing)) {
+          items.delete(id);
+          removed++;
+        }
+      }
+      if (removed) {
+        version++;
+        scheduleSave();
+      }
+      return removed;
+    },
     clear() {
       items.clear();
       version++;
