@@ -38,7 +38,7 @@ function http(ctx) {
 const TRADE_CODE = { 매매: 'A1', 전세: 'B1', 월세: 'B2' };
 const ROOM_CODES = { 원룸: ['C01'], 투룸: ['C01', 'C02'], '쓰리룸+': ['C02'], 빌라: ['C02'], 오피스텔: ['A02'], 아파트: ['A01'] };
 
-function payload(bbox, lastInfo, conditions) {
+function payload(bbox, paging, conditions) {
   const tradeTypes = conditions ? conditions.dealTypes.map((d) => TRADE_CODE[d]) : ['A1', 'B1', 'B2'];
   const realEstateTypes = conditions
     ? [...new Set(conditions.roomTypes.flatMap((r) => ROOM_CODES[r] ?? []))]
@@ -61,6 +61,7 @@ function payload(bbox, lastInfo, conditions) {
       directionTypes: [],
       parkingTypes: [],
       entranceTypes: [],
+      hasArticle: false, // 서버가 모든 키를 요구 (빠지면 FST_ERR_VALIDATION)
       legalDivisionNumbers: [],
       legalDivisionType: 'EUP',
       filtersExclusiveSpace: false,
@@ -69,7 +70,14 @@ function payload(bbox, lastInfo, conditions) {
     },
     boundingBox: { left: bbox.west, right: bbox.east, top: bbox.north, bottom: bbox.south },
     precision: 16,
-    articlePagingRequest: { size: 50, userChannelType: 'PC', articleSortType: 'DATE_DESC', seed: null, lastInfo: lastInfo ?? null },
+    // 첫 요청은 seed/lastInfo 없이 (null 로 보내면 검증 오류). 다음 페이지부터 응답의 값을 그대로
+    articlePagingRequest: {
+      size: 50,
+      userChannelType: 'PC',
+      articleSortType: 'DATE_DESC',
+      ...(paging?.seed != null && { seed: paging.seed }),
+      ...(paging?.lastInfo != null && { lastInfo: paging.lastInfo }),
+    },
     userChannelType: 'PC',
   };
 }
@@ -87,12 +95,12 @@ export default {
     const api = http(ctx);
     const maxPages = ctx.maxPages ?? 5;
     const out = [];
-    let lastInfo = null;
+    let paging = null; // { seed, lastInfo } — 응답에서 받은 커서
 
     for (let page = 1; page <= maxPages; page++) {
       let res;
       try {
-        res = await api.request(URL_, { method: 'POST', body: payload(ctx.bbox, lastInfo, ctx.conditions) });
+        res = await api.request(URL_, { method: 'POST', body: payload(ctx.bbox, paging, ctx.conditions) });
       } catch (err) {
         if (err.status === 429) blockedUntil = Date.now() + COOLDOWN_MS;
         if (out.length) {
@@ -108,7 +116,7 @@ export default {
       const r = res.result ?? {};
       for (const item of r.list ?? []) out.push(item);
       if (!r.hasNextPage || r.lastInfo == null) break;
-      lastInfo = r.lastInfo;
+      paging = { seed: r.seed ?? paging?.seed ?? null, lastInfo: r.lastInfo };
     }
     return out;
   },

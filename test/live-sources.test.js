@@ -122,6 +122,9 @@ test('다방: 필수 헤더·filters JSON·bbox, hasMore 까지 페이지 순회
   const sp = new URL(first.url).searchParams;
   const filters = JSON.parse(sp.get('filters'));
   assert.deepEqual(filters.sellingTypeList, ['MONTHLY_RENT', 'LEASE']);
+  // 빈 목록이면 400 ("층수는 필수값") → 전체 값으로
+  assert.deepEqual(filters.roomFloorList, ['GROUND_FIRST', 'GROUND_SECOND_OVER', 'SEMI_BASEMENT', 'ROOFTOP']);
+  assert.deepEqual(filters.roomTypeList, ['ONE_ROOM', 'TWO_ROOM']);
   assert.deepEqual(JSON.parse(sp.get('bbox')).sw, { lat: 37.55, lng: 126.91 });
 
   const l = dabang.normalize(raws[0]);
@@ -129,6 +132,26 @@ test('다방: 필수 헤더·filters JSON·bbox, hasMore 까지 페이지 순회
   assert.deepEqual([l.deposit, l.monthlyRent, l.maintenanceFee, l.areaM2, l.floor], [1000, 55, 7, 19.8, 3]);
   assert.equal(l.addr.dong, '서교동');
   assert.equal(l.updatedAt, null); // 날짜 없음 → store 가 최초 수집 시각으로 채움
+});
+
+test('다방: 유형별 필터 키 (실제 400 응답에서 확인된 필수값)', async () => {
+  const { buildFilters } = await import('../server/sources/live/dabang.js');
+  const common = ['depositRange', 'priceRange', 'isIncludeMaintenance', 'pyeongRange', 'useApprovalDateRange', 'dealTypeList', 'isShortLease', 'sellingTypeList'];
+  const one = buildFilters('one-two', ['MONTHLY_RENT', 'LEASE', 'SELL'], { roomTypes: ['원룸'], depositMax: 5000, rentMax: 60 });
+  assert.deepEqual(Object.keys(one).sort(), [...common, 'roomFloorList', 'roomTypeList', 'canParking', 'hasElevator', 'hasPano', 'isDivision', 'isDuplex'].sort());
+  assert.deepEqual(one.sellingTypeList, ['MONTHLY_RENT', 'LEASE']); // 원룸·투룸은 매매 없음
+  assert.deepEqual(one.roomTypeList, ['ONE_ROOM']);
+  assert.deepEqual(one.depositRange, { min: 0, max: 5000 });
+  assert.deepEqual(one.priceRange, { min: 0, max: 60 });
+
+  const villa = buildFilters('house-villa', ['LEASE'], { roomTypes: ['빌라'] });
+  assert.deepEqual(Object.keys(villa).sort(), [...common, 'tradeRange', 'roomCountList', 'roomFloorList', 'canParking', 'hasElevator', 'hasPano'].sort());
+  assert.deepEqual(villa.tradeRange, { min: 0, max: 999999 }); // "매매가 범위는 필수값"
+  assert.equal(villa.roomCountList.length, 4);
+
+  const off = buildFilters('officetel', ['MONTHLY_RENT'], null);
+  assert.deepEqual(Object.keys(off).sort(), [...common, 'tradeRange', 'roomCountList', 'parkingNumRange', 'canParking', 'hasElevator', 'hasPano'].sort());
+  assert.ok(Object.values(off).every((v) => !Array.isArray(v) || v.length > 0)); // 빈 목록 없음
 });
 
 test('다방: 전세·매매 억 단위, 반지하', () => {
@@ -167,6 +190,8 @@ test('네이버: lastInfo 로 페이지 순회, bbox 변환, 원 → 만원', as
   assert.equal(raws.length, 2);
   const body = JSON.parse(calls[0].init.body);
   assert.deepEqual(body.boundingBox, { left: 126.91, right: 126.925, top: 37.56, bottom: 37.55 });
+  assert.equal(body.filter.hasArticle, false); // 빠지면 FST_ERR_VALIDATION
+  assert.ok(!('lastInfo' in body.articlePagingRequest) && !('seed' in body.articlePagingRequest)); // 첫 요청엔 없음
   assert.deepEqual(JSON.parse(calls[1].init.body).articlePagingRequest.lastInfo, [123, 'x']);
 
   const l = naver.normalize(raws[0]);

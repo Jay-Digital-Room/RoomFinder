@@ -17,33 +17,60 @@ import { parseRoomDesc, roomTypeFromText, toIso } from './common.js';
 const BASE = 'https://www.dabangapp.com/api/v5/room-list/category';
 const RANGE = { min: 0, max: 999999 };
 
-// 서버가 모든 키를 요구함 (누락 시 400)
-const FILTERS = {
-  'one-two': {
-    sellingTypeList: ['MONTHLY_RENT', 'LEASE'],
-    depositRange: RANGE,
-    priceRange: RANGE,
-    isIncludeMaintenance: false,
-    pyeongRange: RANGE,
-    useApprovalDateRange: RANGE,
-    // 빈 배열 = 조건 없음
-    roomFloorList: [],
-    roomTypeList: [],
-    dealTypeList: ['AGENT'],
-    canParking: false,
-    isShortLease: false,
-    hasElevator: false,
-    hasPano: false,
-    isDivision: false,
-    isDuplex: false,
-  },
-};
-// 빌라/오피스텔 필터 키는 확인되지 않아 원룸·투룸 필터를 기반으로 시도한다 (실패해도 다른 카테고리는 계속)
+// 다방은 유형별로 필터 항목이 다르고, 항목이 하나라도 빠지거나 목록이 비면 400 ("층수는 필수값 입니다" 등).
+// 조건이 없는 항목은 '전체' 값(범위 0~999999, 목록은 모든 값)으로 채운다.
+const UNBOUNDED = 999999;
+const ALL_FLOORS = ['GROUND_FIRST', 'GROUND_SECOND_OVER', 'SEMI_BASEMENT', 'ROOFTOP'];
+const ALL_ROOM_TYPES = ['ONE_ROOM', 'TWO_ROOM']; // 원룸·투룸 목록의 방구조
+const ALL_ROOM_COUNTS = ['ONE_ROOM', 'TWO_ROOM', 'THREE_ROOM', 'FOUR_ROOM']; // 빌라·오피스텔의 방 개수 (FOUR = 4개 이상)
+const range = (max) => ({ min: 0, max: max == null ? UNBOUNDED : Math.min(max, UNBOUNDED) });
+
 const CATEGORIES = [
-  { key: 'one-two', roomTypes: ['원룸', '투룸'], selling: ['MONTHLY_RENT', 'LEASE'] },
+  { key: 'one-two', roomTypes: ['원룸', '투룸'], selling: ['MONTHLY_RENT', 'LEASE'] }, // 원룸·투룸 목록은 매매 없음
   { key: 'house-villa', roomTypes: ['빌라', '투룸', '쓰리룸+'], selling: ['MONTHLY_RENT', 'LEASE', 'SELL'] },
   { key: 'officetel', roomTypes: ['오피스텔'], selling: ['MONTHLY_RENT', 'LEASE', 'SELL'] },
 ];
+
+/** 유형별 필터 (키 구성은 다방 웹이 보내는 것과 같게) */
+export function buildFilters(category, selling, conditions) {
+  const rooms = conditions?.roomTypes ?? [];
+  const common = {
+    depositRange: range(conditions?.depositMax),
+    priceRange: range(conditions?.rentMax),
+    isIncludeMaintenance: false,
+    pyeongRange: range(),
+    useApprovalDateRange: range(),
+    dealTypeList: ['AGENT'],
+    isShortLease: false,
+  };
+  if (category === 'one-two') {
+    const roomTypeList = [rooms.includes('원룸') && 'ONE_ROOM', rooms.includes('투룸') && 'TWO_ROOM'].filter(Boolean);
+    return {
+      ...common,
+      sellingTypeList: selling.filter((s) => s !== 'SELL'),
+      roomFloorList: [...ALL_FLOORS],
+      roomTypeList: roomTypeList.length ? roomTypeList : [...ALL_ROOM_TYPES],
+      canParking: false,
+      hasElevator: false,
+      hasPano: false,
+      isDivision: false,
+      isDuplex: false,
+    };
+  }
+  // 빌라는 "빌라" 를 고르면 방 개수 전체, 아니면 고른 방 개수만
+  let roomCountList = [...ALL_ROOM_COUNTS];
+  if (category === 'house-villa' && !rooms.includes('빌라')) {
+    const picked = [rooms.includes('투룸') && 'TWO_ROOM', rooms.includes('쓰리룸+') && 'THREE_ROOM', rooms.includes('쓰리룸+') && 'FOUR_ROOM'].filter(Boolean);
+    if (picked.length) roomCountList = picked;
+  }
+  const sale = { ...common, sellingTypeList: selling, tradeRange: range(), roomCountList };
+  if (category === 'house-villa') {
+    return { ...sale, roomFloorList: [...ALL_FLOORS], canParking: false, hasElevator: false, hasPano: false };
+  }
+  // officetel
+  return { ...sale, parkingNumRange: range(), canParking: false, hasElevator: false, hasPano: false };
+}
+
 const SELLING = { 월세: 'MONTHLY_RENT', 전세: 'LEASE', 매매: 'SELL' };
 
 /** 수집 조건에 맞는 카테고리·거래유형만 남긴다 */
@@ -72,21 +99,14 @@ function http(ctx) {
 }
 
 function url(cat, tile, page, conditions) {
-  const category = cat.key;
-  const filters = {
-    ...FILTERS['one-two'],
-    sellingTypeList: cat.selling,
-    depositRange: { min: 0, max: conditions?.depositMax ?? RANGE.max },
-    priceRange: { min: 0, max: conditions?.rentMax ?? RANGE.max },
-  };
   const p = new URLSearchParams({
-    filters: JSON.stringify(filters),
+    filters: JSON.stringify(buildFilters(cat.key, cat.selling, conditions)),
     bbox: JSON.stringify({ sw: { lat: tile.south, lng: tile.west }, ne: { lat: tile.north, lng: tile.east } }),
     zoom: '16',
     useMap: 'naver',
     page: String(page),
   });
-  return `${BASE}/${category}/bbox?${p}`;
+  return `${BASE}/${cat.key}/bbox?${p}`;
 }
 
 export default {
